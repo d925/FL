@@ -37,10 +37,14 @@ def aggregate_metrics(results):
     return {"accuracy": avg_accuracy, "loss": avg_loss}
 
 # Flower strategy + evaluate_metrics_aggregation_fn に渡す
+def fit_config_fn(rnd: int):
+    return {"proximal_mu": 0.01}
+
 strategy = fl.server.strategy.FedProx(
     fraction_fit=0.5,
     fraction_evaluate=1.0,
-    #evaluate_metrics_aggregation_fn=aggregate_metrics, 
+    evaluate_metrics_aggregation_fn=aggregate_metrics, 
+    fit_config_fn=fit_config_fn,
     proximal_mu=0.01,
 )
 
