@@ -40,7 +40,7 @@ def aggregate_metrics(results):
 strategy = fl.server.strategy.FedProx(
     fraction_fit=0.5,
     fraction_evaluate=1.0,
-    evaluate_metrics_aggregation_fn=aggregate_metrics, 
+    #evaluate_metrics_aggregation_fn=aggregate_metrics, 
     proximal_mu=0.01,
 )
 
