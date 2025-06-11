@@ -117,7 +117,8 @@ class RemappedDataset(torch.utils.data.Dataset):
 
 def get_partitioned_data(client_id: int, num_clients: int):
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize((256, 256)),  # 念のため
+        transforms.RandomCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),
         transforms.ToTensor()
