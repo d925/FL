@@ -34,18 +34,31 @@ class FLClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
+        global_params = [p.clone().detach() for p in self.model.parameters()]  # ← グローバルパラメータ保存
+
         self.model.train()
-        for _ in range(1): 
+        mu = config.get("proximal_mu", 0.01)  # ← サーバから渡されるかデフォルト
+
+        for _ in range(1):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
+
+                # Proximal term: μ/2 * ||w - w_global||²
+                prox_term = 0.0
+                for param, global_param in zip(self.model.parameters(), global_params):
+                    prox_term += ((param - global_param.to(self.device)) ** 2).sum()
+                loss += (mu / 2) * prox_term
+
                 loss.backward()
                 self.optimizer.step()
-        self.log("Finished local training")
+        self.log("Finished local training with FedProx")
         return self.get_parameters(config), len(self.trainloader.dataset), {}
-
+    def fit_config(rnd):
+        return {"proximal_mu": 0.01}
+    
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
         self.model.eval()
