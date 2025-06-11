@@ -54,5 +54,7 @@ if __name__ == "__main__":
     fl.server.start_server(
         server_address="localhost:8080",
         config=ServerConfig(num_rounds=num_rounds),
+        min_fit_clients=10,         
+        min_available_clients=10,
         strategy=strategy,
     )
