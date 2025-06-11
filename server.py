@@ -6,7 +6,7 @@ fl.server.start_server(
     server_address="localhost:8080",
     config=ServerConfig(num_rounds=num_rounds),
     strategy=fl.server.strategy.FedAvg(
-        fraction_fit=0.1,
+        fraction_fit=0.5,
         proximal_mu=0.01,
     )
 )
