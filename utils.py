@@ -1,4 +1,3 @@
-# data_utils.py
 import torch
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
@@ -6,7 +5,6 @@ from collections import defaultdict
 import random
 import os
 import json
-from typing import Tuple, Dict
 from config import num_labels, is_iid
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
@@ -15,8 +13,7 @@ DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 
 def group_labels_by_crop(class_to_idx):
     """
-    辞書のキー（クラス名）から「作物名」を抽出し、作物ごとのラベル（正しいインデックス）を集約する。
-    修正前は enumerate() により添字を使用していたため、正しいインデックスが得られなかった。
+    各クラス名から作物名を抽出し、グローバルなラベル（正しいインデックス）を集める
     """
     crop_to_labels = defaultdict(list)
     for class_name, idx in class_to_idx.items():
@@ -24,11 +21,7 @@ def group_labels_by_crop(class_to_idx):
         crop_to_labels[crop].append(idx)
     return crop_to_labels
 
-def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[int, list]]:
-    """
-    各クライアントにラベルを割り当てる。
-    IID の場合は全作物（＝すべてのラベル）を割り当て、非IID の場合はランダムに 1〜min(3, len(crop_list)) 個の作物を選択する。
-    """
+def generate_label_assignments(num_clients: int):
     if os.path.exists(LABEL_ASSIGN_PATH):
         with open(LABEL_ASSIGN_PATH, "r") as f:
             data = json.load(f)
@@ -44,11 +37,11 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
     label_assignments = defaultdict(list)
     label_to_clients = defaultdict(list)
 
-    # Non-IID構成：各クライアントに1〜min(3, len(crop_list))作物を割り当て、その作物のラベルを取得
+    # Non-IID構成：各クライアントに1〜min(3, len(crop_list))作物を割り当て、その作物のラベル（グローバル番号）を取得
     crop_assignments = {}
     for client_id in range(num_clients):
         if is_iid:
-            selected_crops = crop_list[:]  # すべての作物を割り当てる
+            selected_crops = crop_list[:]   # 全作物を割り当てる
         else:
             num_to_sample = random.randint(1, min(3, len(crop_list)))
             selected_crops = random.sample(crop_list, num_to_sample)
@@ -62,7 +55,7 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
     used_labels = set()
     for labels in label_assignments.values():
         used_labels.update(labels)
-
+    
     num_total_labels = len(used_labels)
 
     with open(LABEL_ASSIGN_PATH, "w") as f:
@@ -78,56 +71,11 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
 
     return label_assignments, label_to_clients
 
-def prepare_label_indices():
-    """
-    各ラベルのインデックスリストを 80:20 で分割して JSON に保存。
-    既にファイルが存在する場合は再計算を行わない。
-    """
-    if os.path.exists(LABEL_INDICES_PATH):
-        print("Label indices already prepared.")
-        return
-
-    dataset = ImageFolder(root=DATA_DIR)
-    label_to_indices = defaultdict(list)
-    for idx, (_, label) in enumerate(dataset):
-        label_to_indices[label].append(idx)
-
-    train = {}
-    test = {}
-
-    for label, indices in label_to_indices.items():
-        random.shuffle(indices)
-        split = int(0.8 * len(indices))
-        train[label] = indices[:split]
-        test[label] = indices[split:]
-
-    with open(LABEL_INDICES_PATH, "w") as f:
-        json.dump({
-            "train": {str(k): v for k, v in train.items()},
-            "test": {str(k): v for k, v in test.items()},
-        }, f, indent=2)
-
-    print("Saved label index mapping to JSON.")
-
-class RemappedDataset(torch.utils.data.Dataset):
-    """
-    データセット内のラベルを、各クライアント用の連番（ローカルラベル）に変換するラッパークラス
-    """
-    def __init__(self, subset, label_map):
-        self.subset = subset
-        self.label_map = label_map
-
-    def __getitem__(self, index):
-        image, label = self.subset[index]
-        remapped_label = self.label_map[label]
-        return image, remapped_label
-
-    def __len__(self):
-        return len(self.subset)
-
 def get_partitioned_data(client_id: int, num_clients: int):
     """
-    指定したクライアント用にデータセットを抽出し、ローカルラベルにリマッピングする。
+    各クライアント用にデータセットを抽出する処理  
+    ※各クライアントは自身に割り当てられたグローバルラベルのデータのみを取得する  
+    かつ、ラベルのリマッピングは行わず、元のグローバルラベル（0～num_total_labels-1）として扱う。
     """
     transform = transforms.Compose([
         transforms.Resize((256, 256)),  # サイズを統一
@@ -144,12 +92,9 @@ def get_partitioned_data(client_id: int, num_clients: int):
     test_label_indices = {int(k): v for k, v in data["test"].items()}
 
     label_assignments, label_to_clients = generate_label_assignments(num_clients)
-    assigned_labels = label_assignments[client_id]  # グローバルラベル
+    assigned_labels = label_assignments[client_id]  # このクライアントが扱うグローバルラベル
 
-    # グローバルラベル -> ローカル連番ラベルに変換
-    label_map = {global_label: local_id for local_id, global_label in enumerate(sorted(assigned_labels))}
-
-    def extract_and_remap(label_indices_dict):
+    def extract_subset(label_indices_dict):
         indices = []
         for label in assigned_labels:
             if label not in label_indices_dict:
@@ -160,7 +105,7 @@ def get_partitioned_data(client_id: int, num_clients: int):
                 continue
             client_index = client_list.index(client_id)
             per_client = len(all_indices) // len(client_list)
-            # 余りがある場合、最終クライアントに全て割り当てる
+            # 余りがある場合は、最後のクライアントに全て割り当て
             if client_index < len(client_list) - 1:
                 start = client_index * per_client
                 end = start + per_client
@@ -168,11 +113,11 @@ def get_partitioned_data(client_id: int, num_clients: int):
                 start = client_index * per_client
                 end = len(all_indices)
             indices.extend(all_indices[start:end])
+        # ラベルリマッピングはせず、そのままグローバルラベルとして扱う
         subset = torch.utils.data.Subset(full_dataset, indices)
-        remapped_subset = RemappedDataset(subset, label_map)
-        return remapped_subset
+        return subset
 
-    client_train = extract_and_remap(train_label_indices)
-    client_test = extract_and_remap(test_label_indices)
+    client_train = extract_subset(train_label_indices)
+    client_test = extract_subset(test_label_indices)
 
     return client_train, client_test
