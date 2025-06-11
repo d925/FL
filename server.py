@@ -49,7 +49,7 @@ strategy = fl.server.strategy.FedProx(
     on_fit_config_fn=fit_config_fn,
     min_fit_clients=10,         # 学習を開始するために最低10クライアントの参加を要求
     min_available_clients=num_clients,   # 少なくとも10クライアントが利用可能であることを要求
-    proximal_mu=0.001,
+    proximal_mu=0.01,
 )
 
 if __name__ == "__main__":
