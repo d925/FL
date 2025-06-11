@@ -47,6 +47,8 @@ strategy = fl.server.strategy.FedProx(
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
     on_fit_config_fn=fit_config_fn,
+    min_fit_clients=10,         # 学習を開始するために最低10クライアントの参加を要求
+    min_available_clients=10,   # 少なくとも10クライアントが利用可能であることを要求
     proximal_mu=0.01,
 )
 
@@ -54,7 +56,5 @@ if __name__ == "__main__":
     fl.server.start_server(
         server_address="localhost:8080",
         config=ServerConfig(num_rounds=num_rounds),
-        min_fit_clients=10,         
-        min_available_clients=10,
         strategy=strategy,
     )
