@@ -68,9 +68,10 @@ class FLClient(fl.client.NumPyClient):
             for data, target in self.testloader:
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
-                total_loss += self.criterion(output, target).item() * data.size(0)
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
+                loss = self.criterion(output, target)
+                total_loss += loss.item() * data.size(0)
+                pred = output.argmax(dim=1)  # shape: (batch,)
+                correct += pred.eq(target).sum().item()
         avg_loss = total_loss / len(self.testloader.dataset)
         accuracy = correct / len(self.testloader.dataset)
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%")
