@@ -36,8 +36,8 @@ def aggregate_metrics(results):
 
 # Flower strategy + evaluate_metrics_aggregation_fn に渡す
 strategy = fl.server.strategy.FedProx(
-    fraction_fit=0.2,
-    fraction_evaluate=0.2,
+    fraction_fit=0.5,
+    fraction_evaluate=1.0,
     proximal_mu=0.01,
 )
 
