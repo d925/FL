@@ -11,7 +11,7 @@ from config import num_labels, is_iid
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
-DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
+DATA_DIR = "./FL/Plant_leave_diseases_dataset_with_augmentation"
 
 def group_labels_by_crop(class_to_idx):
     """

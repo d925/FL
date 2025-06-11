@@ -37,7 +37,7 @@ class FLClient(fl.client.NumPyClient):
         global_params = [p.clone().detach() for p in self.model.parameters()]  # FedProx用にグローバルパラメータを保存
 
         self.model.train()
-        mu = config.get("proximal_mu", 0.01)
+        mu = config.get("proximal_mu", 0.001)
 
         for _ in range(3):
             for data, target in self.trainloader:
