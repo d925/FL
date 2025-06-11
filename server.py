@@ -20,6 +20,8 @@ def save_metrics_to_json(round_number, accuracy, loss):
 
 def aggregate_metrics(results):
     global current_round
+    print(f"[Server] Raw results from clients:\n{results}\n")  # ここで結果を出力する
+
     accuracies = [metrics["accuracy"] * num_examples for _, num_examples, metrics in results]
     losses = [loss * num_examples for loss, num_examples, _ in results]
     total_examples = sum(num_examples for _, num_examples, _ in results)
