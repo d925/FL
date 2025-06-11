@@ -90,7 +90,7 @@ class FLClient(fl.client.NumPyClient):
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
-
+    """
     # --- ここからGPU初期化追加 ---
     # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
     # --- ここまでGPU初期化追加 ---
-
+    """
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
