@@ -44,7 +44,7 @@ strategy = fl.server.strategy.FedProx(
     fraction_fit=0.5,
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics, 
-    fit_config_fn=fit_config_fn,
+    on_fit_config_fn=fit_config_fn,
     proximal_mu=0.01,
 )
 
