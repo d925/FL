@@ -74,10 +74,7 @@ class FLClient(fl.client.NumPyClient):
         avg_loss = total_loss / len(self.testloader.dataset)
         accuracy = correct / len(self.testloader.dataset)
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%")
-        return avg_loss, len(self.testloader.dataset), {
-        "accuracy": accuracy,
-        "rnd": config.get("server_round", -1)
-}
+        return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy}
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
