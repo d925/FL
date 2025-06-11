@@ -4,6 +4,7 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import SimpleCNN
+from flwr.server.strategy import FedProx
 from utils import get_partitioned_data
 from config import num_clients
 
