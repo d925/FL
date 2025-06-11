@@ -39,7 +39,7 @@ class FLClient(fl.client.NumPyClient):
         self.model.train()
         mu = config.get("proximal_mu", 0.01)
 
-        for _ in range(1):
+        for _ in range(5):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
@@ -88,8 +88,8 @@ if __name__ == "__main__":
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=0)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=128)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=32)
 
     fl.client.start_numpy_client(
         server_address="localhost:8080",
