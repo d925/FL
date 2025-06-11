@@ -34,6 +34,10 @@ class FLClient(fl.client.NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
+        for _, target in self.trainloader:
+            assert (target >= 0).all(), "💥 target に負の値がある"
+            assert (target < self.model.classifier[-1].out_features).all(), "💥 target が num_classes を超えてる"
+            break
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
