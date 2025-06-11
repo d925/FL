@@ -54,7 +54,7 @@ strategy = fl.server.strategy.FedProx(
 
 if __name__ == "__main__":
     fl.server.start_server(
-        server_address="localhost:8080",
+        server_address="localhost:8081",
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
     )
