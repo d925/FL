@@ -1,30 +1,27 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torchvision import models
 
-class SimpleCNN(nn.Module):
-    def __init__(self, num_classes):
+class MobileNetV2_FL(nn.Module):
+    def __init__(self, num_classes, freeze_features=True):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 8, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(8, 16, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        # 事前学習済みモデルを読み込み
+        base_model = models.mobilenet_v2(weights=None)  # 転移学習したいなら weights='IMAGENET1K_V1'
         
-        with torch.no_grad():
-            dummy = torch.zeros(1, 3, 224, 224)
-            dummy = self.pool(F.relu(self.conv1(dummy)))
-            dummy = self.pool(F.relu(self.conv2(dummy)))
-            dummy = self.pool(F.relu(self.conv3(dummy)))
-            n_size = dummy.numel()
-
-        self.fc1 = nn.Linear(n_size, 64)
-        self.fc2 = nn.Linear(64, num_classes)
+        if freeze_features:
+            for param in base_model.features.parameters():
+                param.requires_grad = False
+        
+        self.features = base_model.features
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(base_model.last_channel, num_classes)
+        )
 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
         return x

@@ -3,7 +3,7 @@ import json
 import flwr as fl
 import torch
 import torch.optim as optim
-from model import SimpleCNN
+from model import MobileNetV2_FL
 from utils import get_partitioned_data
 from config import num_clients
 
@@ -82,11 +82,11 @@ if __name__ == "__main__":
     with open(LABEL_ASSIGN_PATH, "r") as f:
         label_info = json.load(f)
         num_labels = label_info["num_total_labels"]  # 👈 ここ！
-    model = SimpleCNN(num_classes=num_labels).to(device)
+    model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=16)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=32)
 
     fl.client.start_numpy_client(
         server_address="localhost:8080",
