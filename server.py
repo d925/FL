@@ -22,9 +22,11 @@ def aggregate_metrics(results):
     global current_round
     print(f"[Server] Raw results from clients:\n{results}\n")
 
-    accuracies = [metrics["accuracy"] * num_examples for loss, num_examples, metrics in results]
-    losses = [loss * num_examples for loss, num_examples, metrics in results]
-    total_examples = sum(num_examples for loss, num_examples, metrics in results)
+    total_examples = sum(num_examples for num_examples, _ in results)
+
+    accuracies = [metrics["accuracy"] * num_examples for num_examples, metrics in results]
+    losses = [metrics["loss"] * num_examples for num_examples, metrics in results]
+
     avg_accuracy = sum(accuracies) / total_examples
     avg_loss = sum(losses) / total_examples
     current_round += 1
