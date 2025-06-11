@@ -4,8 +4,9 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import MobileNetV2_FL
-from utils import get_partitioned_data  # 上記 data ユーティリティファイルを想定
+from utils import get_partitioned_data
 from config import num_clients
+import os
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 
@@ -34,7 +35,7 @@ class FLClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-        global_params = [p.clone().detach() for p in self.model.parameters()]  # FedProx用にグローバルパラメータを保存
+        global_params = [p.clone().detach() for p in self.model.parameters()]
 
         self.model.train()
         mu = config.get("proximal_mu", 0.001)
@@ -45,7 +46,6 @@ class FLClient(fl.client.NumPyClient):
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                # FedProx の proximal term
                 prox_term = 0.0
                 for param, global_param in zip(self.model.parameters(), global_params):
                     prox_term += ((param - global_param.to(self.device)) ** 2).sum()
@@ -74,7 +74,25 @@ class FLClient(fl.client.NumPyClient):
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # --- ここからGPU初期化追加 ---
+    # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if visible_devices:
+        devices = visible_devices.split(",")
+        assigned_gpu = int(devices[0])  # 先頭のGPUを使う想定
+    else:
+        assigned_gpu = 0
+
+    torch.cuda.set_device(assigned_gpu)
+
+    # ここでプロセスのGPUメモリ使用量制限をかける（任意、メモリ足りないなら調整）
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)  # 50%に制限例
+
+    device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
+    # --- ここまでGPU初期化追加 ---
 
     try:
         with open(LABEL_ASSIGN_PATH, "r") as f:
@@ -84,7 +102,6 @@ if __name__ == "__main__":
         print("Error reading label assignments:", e)
         sys.exit(1)
 
-    # モデルはグローバルなラベル全数分の出力を持つ
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
