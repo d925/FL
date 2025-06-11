@@ -4,7 +4,7 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import MobileNetV2_FL
-from utils import get_partitioned_data
+from utils import get_partitioned_data,num_labels
 from config import num_clients
 import os
 
@@ -107,14 +107,6 @@ if __name__ == "__main__":
 
     device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
     # --- ここまでGPU初期化追加 ---
-
-    try:
-        with open(LABEL_ASSIGN_PATH, "r") as f:
-            label_info = json.load(f)
-        num_labels = label_info["num_total_labels"]
-    except Exception as e:
-        print("Error reading label assignments:", e)
-        sys.exit(1)
 
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
