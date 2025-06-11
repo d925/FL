@@ -11,7 +11,7 @@ class SimpleCNN(nn.Module):
         self.conv3 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
         
         with torch.no_grad():
-            dummy = torch.zeros(1, 3, 64, 64)
+            dummy = torch.zeros(1, 3, 224, 224)
             dummy = self.pool(F.relu(self.conv1(dummy)))
             dummy = self.pool(F.relu(self.conv2(dummy)))
             dummy = self.pool(F.relu(self.conv3(dummy)))
