@@ -20,9 +20,10 @@ def save_metrics_to_json(round_number, accuracy, loss):
 
 def aggregate_metrics(results):
     global current_round
-    accuracies = [r["accuracy"] * r["num_examples"] for r in results]
-    losses = [r["loss"] * r["num_examples"] for r in results]
-    num_examples = sum(r["num_examples"] for r in results)
+    accuracies = [metrics["accuracy"] * metrics["num_examples"] for _, metrics in results]
+    losses = [metrics["loss"] * metrics["num_examples"] for _, metrics in results]
+    num_examples = sum(metrics["num_examples"] for _, metrics in results)
+
 
     avg_accuracy = sum(accuracies) / num_examples
     avg_loss = sum(losses) / num_examples
