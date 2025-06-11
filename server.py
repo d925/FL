@@ -1,7 +1,7 @@
 # server.py
 import flwr as fl
 from flwr.server import ServerConfig
-from config import num_rounds
+from config import num_rounds,num_clients
 import json
 import os
 
@@ -43,13 +43,13 @@ def fit_config_fn(rnd: int):
 
 # FedProx 戦略の設定
 strategy = fl.server.strategy.FedProx(
-    fraction_fit=0.5,
+    fraction_fit=1.0,
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
     on_fit_config_fn=fit_config_fn,
     min_fit_clients=10,         # 学習を開始するために最低10クライアントの参加を要求
-    min_available_clients=10,   # 少なくとも10クライアントが利用可能であることを要求
-    proximal_mu=0.01,
+    min_available_clients=num_clients,   # 少なくとも10クライアントが利用可能であることを要求
+    proximal_mu=0.001,
 )
 
 if __name__ == "__main__":
