@@ -109,6 +109,6 @@ if __name__ == "__main__":
     testloader = torch.utils.data.DataLoader(testset, batch_size=32)
 
     fl.client.start_numpy_client(
-        server_address="172.21.33.102",
+        server_address="tcp://172.21.33.102:8081",
         client=FLClient(model, trainloader, testloader, client_id=client_id, device=device)
     )
