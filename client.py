@@ -56,6 +56,16 @@ class FLClient(fl.client.NumPyClient):
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
+        # evaluate関数内の最初の方に追加
+        with torch.no_grad():
+            all_labels = []
+            for _, target in self.testloader:
+                all_labels += target.tolist()
+            max_label = max(all_labels)
+            min_label = min(all_labels)
+            print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
+            assert max_label < self.model.classifier[1].out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
+
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
