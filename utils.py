@@ -50,7 +50,7 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
         if is_iid:
             selected_crops = crop_list[:]  # すべての作物を割り当てる
         else:
-            num_to_sample = random.randint(1, min(3, len(crop_list)))
+            num_to_sample = random.randint(2, min(5, len(crop_list)))
             selected_crops = random.sample(crop_list, num_to_sample)
         crop_assignments[client_id] = selected_crops
 
