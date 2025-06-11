@@ -34,10 +34,12 @@ class FLClient(fl.client.NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
+        print("a")
         for _, target in self.trainloader:
             assert (target >= 0).all(), "💥 target に負の値がある"
             assert (target < self.model.classifier[-1].out_features).all(), "💥 target が num_classes を超えてる"
             break
+        print("b")
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
@@ -46,6 +48,7 @@ class FLClient(fl.client.NumPyClient):
 
         for _ in range(1):
             for data, target in self.trainloader:
+                print("c")
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
@@ -57,10 +60,12 @@ class FLClient(fl.client.NumPyClient):
                 loss.backward()
                 self.optimizer.step()
         self.log("Finished local training with FedProx")
+        print("d")
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
         # evaluate関数内の最初の方に追加
+        print("e")
         with torch.no_grad():
             all_labels = []
             for _, target in self.testloader:
@@ -69,18 +74,20 @@ class FLClient(fl.client.NumPyClient):
             min_label = min(all_labels)
             print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
             assert max_label < self.model.classifier[1].out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
-
+        print("f")
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
         correct = 0
         with torch.no_grad():
             for data, target in self.testloader:
+                print("g")
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 total_loss += self.criterion(output, target).item() * data.size(0)
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
+        print("f")
         avg_loss = total_loss / len(self.testloader.dataset)
         accuracy = correct / len(self.testloader.dataset)
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
