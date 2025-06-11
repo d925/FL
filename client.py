@@ -107,9 +107,9 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
         torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)  # 50%に制限例
 
-    device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
     # --- ここまでGPU初期化追加 ---
     """
+    device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
