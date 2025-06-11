@@ -48,7 +48,6 @@ class FLClient(fl.client.NumPyClient):
 
         for _ in range(1):
             for data, target in self.trainloader:
-                print("c")
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
@@ -81,7 +80,6 @@ class FLClient(fl.client.NumPyClient):
         correct = 0
         with torch.no_grad():
             for data, target in self.testloader:
-                print("g")
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 total_loss += self.criterion(output, target).item() * data.size(0)
