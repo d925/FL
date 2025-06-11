@@ -34,12 +34,10 @@ class FLClient(fl.client.NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
-        print("a")
         for _, target in self.trainloader:
             assert (target >= 0).all(), "💥 target に負の値がある"
             assert (target < self.model.classifier[-1].out_features).all(), "💥 target が num_classes を超えてる"
             break
-        print("b")
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
@@ -48,6 +46,7 @@ class FLClient(fl.client.NumPyClient):
 
         for _ in range(1):
             for data, target in self.trainloader:
+                print("learning")
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
@@ -59,7 +58,6 @@ class FLClient(fl.client.NumPyClient):
                 loss.backward()
                 self.optimizer.step()
         self.log("Finished local training with FedProx")
-        print("d")
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
@@ -85,7 +83,6 @@ class FLClient(fl.client.NumPyClient):
                 total_loss += self.criterion(output, target).item() * data.size(0)
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
-        print("f")
         avg_loss = total_loss / len(self.testloader.dataset)
         accuracy = correct / len(self.testloader.dataset)
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
@@ -116,8 +113,8 @@ if __name__ == "__main__":
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=32)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=64, shuffle=True, num_workers=0)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=64)
 
     fl.client.start_numpy_client(
         server_address="0.tcp.jp.ngrok.io:11731",
