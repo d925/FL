@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     # --- ここまでGPU初期化追加 ---
     """
-    device = torch.device(f"cuda:{assigned_gpu}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
     model = MobileNetV2_FL(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
@@ -117,6 +117,6 @@ if __name__ == "__main__":
     testloader = torch.utils.data.DataLoader(testset, batch_size=64)
 
     fl.client.start_numpy_client(
-        server_address="8081",
+        server_address="localhost:8080",
         client=FLClient(model, trainloader, testloader, client_id=client_id, device=device)
     )
