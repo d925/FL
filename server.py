@@ -43,7 +43,7 @@ def fit_config_fn(rnd: int):
 
 # FedProx 戦略の設定
 strategy = fl.server.strategy.FedProx(
-    fraction_fit=0.5,
+    fraction_fit=1.0,
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
     on_fit_config_fn=fit_config_fn,
