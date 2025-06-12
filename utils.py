@@ -128,8 +128,6 @@ def prepare_processed_data(client_id: int, num_clients: int):
         data = json.load(f)
     train_label_indices = {int(k): v for k, v in data["train"].items()}
     test_label_indices = {int(k): v for k, v in data["test"].items()}
-
-    from data_utils import generate_label_assignments  # あなたの既存関数をimport
     label_assignments, _ = generate_label_assignments(num_clients)
     assigned_labels = label_assignments[client_id]
 
