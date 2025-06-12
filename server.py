@@ -37,19 +37,14 @@ def aggregate_metrics(results):
     print(f"\n[Server] Round summary → Accuracy: {avg_accuracy:.4f}, Loss: {avg_loss:.4f}\n")
     save_metrics_to_json(current_round, avg_accuracy, avg_loss)
     return {"accuracy": avg_accuracy, "loss": avg_loss}
-
-def fit_config_fn(rnd: int):
-    return {"proximal_mu": 0.01}
-
 # FedProx 戦略の設定
 strategy = fl.server.strategy.FedProx(
     fraction_fit=1.0,
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
-    on_fit_config_fn=fit_config_fn,
-    min_fit_clients=10,         # 学習を開始するために最低10クライアントの参加を要求
+    min_fit_clients=num_clients/2,         # 学習を開始するために最低10クライアントの参加を要求
     min_available_clients=num_clients,   # 少なくとも10クライアントが利用可能であることを要求
-    proximal_mu=0.01,
+    proximal_mu=0,
 )
 
 if __name__ == "__main__":
