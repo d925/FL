@@ -111,25 +111,26 @@ def prepare_label_indices():
     print("Saved label index mapping to JSON.")
 
 def prepare_processed_data(client_id: int, num_clients: int):
-    # すでに加工済みフォルダがあればスキップ
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
     if os.path.exists(train_dir) and os.path.exists(test_dir):
         print(f"Processed data for client {client_id} already exists, skipping generation.")
         return
 
-    # 元データとラベル割り当てを取得
     transform = transforms.Compose([
         transforms.Resize((64, 64)),
-        # ランダム反転は学習時だけで良いのでここでは外してもいい
+        # ランダム反転は学習時だけなのでここでは入れない
         transforms.ToTensor(),
     ])
+
     full_dataset = ImageFolder(root=DATA_DIR)
-    with open(LABEL_INDICES_PATH, "r") as f:
+    with open("label_indices.json", "r") as f:
         data = json.load(f)
     train_label_indices = {int(k): v for k, v in data["train"].items()}
     test_label_indices = {int(k): v for k, v in data["test"].items()}
-    label_assignments, label_to_clients = generate_label_assignments(num_clients)
+
+    from data_utils import generate_label_assignments  # あなたの既存関数をimport
+    label_assignments, _ = generate_label_assignments(num_clients)
     assigned_labels = label_assignments[client_id]
 
     def save_subset(indices, base_dir):
@@ -137,26 +138,19 @@ def prepare_processed_data(client_id: int, num_clients: int):
             path, label = full_dataset.samples[idx]
             if label not in assigned_labels:
                 continue
-            # 画像読み込み・transform
             img = Image.open(path).convert("RGB")
-            img = transform(img)
-            # 保存先ディレクトリ (クラスごとに分ける)
+            img = transforms.Resize((64, 64))(img)  # transform でToTensorはせずPILのまま
             class_dir = os.path.join(base_dir, f"class_{label}")
             os.makedirs(class_dir, exist_ok=True)
-            # 保存ファイル名は元のファイル名を使う
             filename = os.path.basename(path)
             save_path = os.path.join(class_dir, filename)
-            # tensorをPILに戻して保存
-            img_pil = transforms.ToPILImage()(img)
-            img_pil.save(save_path)
+            img.save(save_path)
 
-    # 保存
     print(f"Preparing processed train data for client {client_id} ...")
-    save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])],
-                train_dir)
+    save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])], train_dir)
     print(f"Preparing processed test data for client {client_id} ...")
-    save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])],
-                test_dir)
+    save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])], test_dir)
+
 
 def get_partitioned_data(client_id: int, num_clients: int):
     # 加工済みデータのフォルダ読み込み
