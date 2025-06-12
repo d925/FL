@@ -12,9 +12,6 @@ from config import num_labels, is_iid
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-CACHE_DIR = "./cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
 
 def group_labels_by_crop(class_to_idx):
     """
@@ -112,26 +109,14 @@ def prepare_label_indices():
 
     print("Saved label index mapping to JSON.")
 
-def cache_path(client_id, split):
-    return os.path.join(CACHE_DIR, f"client_{client_id}_{split}_dataset.pt")
-
 def get_partitioned_data(client_id: int, num_clients: int):
     """
-    キャッシュ使って前処理高速化。  
-    一回目は通常処理してtorch.save()で保存、2回目以降はtorch.load()で読み込み。
+    各クライアント用にデータセットを抽出する処理  
+    ※各クライアントは自身に割り当てられたグローバルラベルのデータのみを取得する  
+    かつ、ラベルのリマッピングは行わず、元のグローバルラベル（0～num_total_labels-1）として扱う。
     """
-
-    train_cache = cache_path(client_id, "train")
-    test_cache = cache_path(client_id, "test")
-
-    if os.path.exists(train_cache) and os.path.exists(test_cache):
-        print(f"Loading cached data for client {client_id}")
-        client_train = torch.load(train_cache)
-        client_test = torch.load(test_cache)
-        return client_train, client_test
-
-    # ここからは最初の一回だけ走る重い処理
     transform = transforms.Compose([
+        transforms.Resize((64, 64)),  # サイズを統一
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor()
     ])
@@ -143,7 +128,7 @@ def get_partitioned_data(client_id: int, num_clients: int):
     test_label_indices = {int(k): v for k, v in data["test"].items()}
 
     label_assignments, label_to_clients = generate_label_assignments(num_clients)
-    assigned_labels = label_assignments[client_id]
+    assigned_labels = label_assignments[client_id]  # このクライアントが扱うグローバルラベル
 
     def extract_subset(label_indices_dict):
         indices = []
@@ -156,6 +141,7 @@ def get_partitioned_data(client_id: int, num_clients: int):
                 continue
             client_index = client_list.index(client_id)
             per_client = len(all_indices) // len(client_list)
+            # 余りがある場合は、最後のクライアントに全て割り当て
             if client_index < len(client_list) - 1:
                 start = client_index * per_client
                 end = start + per_client
@@ -163,26 +149,11 @@ def get_partitioned_data(client_id: int, num_clients: int):
                 start = client_index * per_client
                 end = len(all_indices)
             indices.extend(all_indices[start:end])
+        # ラベルリマッピングはせず、そのままグローバルラベルとして扱う
         subset = torch.utils.data.Subset(full_dataset, indices)
         return subset
 
     client_train = extract_subset(train_label_indices)
     client_test = extract_subset(test_label_indices)
 
-    # 先に全部Tensor化してキャッシュ用に保存するやつ。面倒でもここは一括変換が早い。
-    def subset_to_tensors(subset):
-        tensors = []
-        targets = []
-        for img, label in subset:
-            tensors.append(img)
-            targets.append(label)
-        return list(zip(tensors, targets))
-
-    train_data = subset_to_tensors(client_train)
-    test_data = subset_to_tensors(client_test)
-
-    torch.save(train_data, train_cache)
-    torch.save(test_data, test_cache)
-
-    print(f"Cached data saved for client {client_id}")
-    return train_data, test_data
+    return client_train, client_test
