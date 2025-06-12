@@ -12,6 +12,7 @@ from config import num_labels, is_iid
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
+PROCESSED_DATA_DIR = "./processed_dataset"
 
 def group_labels_by_crop(class_to_idx):
     """
@@ -109,51 +110,64 @@ def prepare_label_indices():
 
     print("Saved label index mapping to JSON.")
 
-def get_partitioned_data(client_id: int, num_clients: int):
-    """
-    各クライアント用にデータセットを抽出する処理  
-    ※各クライアントは自身に割り当てられたグローバルラベルのデータのみを取得する  
-    かつ、ラベルのリマッピングは行わず、元のグローバルラベル（0～num_total_labels-1）として扱う。
-    """
-    transform = transforms.Compose([
-        transforms.Resize((64, 64)),  # サイズを統一
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor()
-    ])
-    full_dataset = ImageFolder(root=DATA_DIR, transform=transform)
+def prepare_processed_data(client_id: int, num_clients: int):
+    # すでに加工済みフォルダがあればスキップ
+    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
+    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
+    if os.path.exists(train_dir) and os.path.exists(test_dir):
+        print(f"Processed data for client {client_id} already exists, skipping generation.")
+        return
 
+    # 元データとラベル割り当てを取得
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        # ランダム反転は学習時だけで良いのでここでは外してもいい
+        transforms.ToTensor(),
+    ])
+    full_dataset = ImageFolder(root=DATA_DIR)
     with open(LABEL_INDICES_PATH, "r") as f:
         data = json.load(f)
     train_label_indices = {int(k): v for k, v in data["train"].items()}
     test_label_indices = {int(k): v for k, v in data["test"].items()}
-
     label_assignments, label_to_clients = generate_label_assignments(num_clients)
-    assigned_labels = label_assignments[client_id]  # このクライアントが扱うグローバルラベル
+    assigned_labels = label_assignments[client_id]
 
-    def extract_subset(label_indices_dict):
-        indices = []
-        for label in assigned_labels:
-            if label not in label_indices_dict:
+    def save_subset(indices, base_dir):
+        for idx in indices:
+            path, label = full_dataset.samples[idx]
+            if label not in assigned_labels:
                 continue
-            all_indices = label_indices_dict[label]
-            client_list = label_to_clients[label]
-            if client_id not in client_list:
-                continue
-            client_index = client_list.index(client_id)
-            per_client = len(all_indices) // len(client_list)
-            # 余りがある場合は、最後のクライアントに全て割り当て
-            if client_index < len(client_list) - 1:
-                start = client_index * per_client
-                end = start + per_client
-            else:
-                start = client_index * per_client
-                end = len(all_indices)
-            indices.extend(all_indices[start:end])
-        # ラベルリマッピングはせず、そのままグローバルラベルとして扱う
-        subset = torch.utils.data.Subset(full_dataset, indices)
-        return subset
+            # 画像読み込み・transform
+            img = Image.open(path).convert("RGB")
+            img = transform(img)
+            # 保存先ディレクトリ (クラスごとに分ける)
+            class_dir = os.path.join(base_dir, f"class_{label}")
+            os.makedirs(class_dir, exist_ok=True)
+            # 保存ファイル名は元のファイル名を使う
+            filename = os.path.basename(path)
+            save_path = os.path.join(class_dir, filename)
+            # tensorをPILに戻して保存
+            img_pil = transforms.ToPILImage()(img)
+            img_pil.save(save_path)
 
-    client_train = extract_subset(train_label_indices)
-    client_test = extract_subset(test_label_indices)
+    # 保存
+    print(f"Preparing processed train data for client {client_id} ...")
+    save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])],
+                train_dir)
+    print(f"Preparing processed test data for client {client_id} ...")
+    save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])],
+                test_dir)
 
-    return client_train, client_test
+def get_partitioned_data(client_id: int, num_clients: int):
+    # 加工済みデータのフォルダ読み込み
+    transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),  # 学習時のみのaugmentation
+        transforms.ToTensor(),
+    ])
+    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
+    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
+
+    train_dataset = ImageFolder(root=train_dir, transform=transform)
+    test_dataset = ImageFolder(root=test_dir, transform=transform)
+
+    return train_dataset, test_dataset
