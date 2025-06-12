@@ -116,9 +116,7 @@ def get_partitioned_data(client_id: int, num_clients: int):
     かつ、ラベルのリマッピングは行わず、元のグローバルラベル（0～num_total_labels-1）として扱う。
     """
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),  # サイズを統一
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
         transforms.ToTensor()
     ])
     full_dataset = ImageFolder(root=DATA_DIR, transform=transform)
