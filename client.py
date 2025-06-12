@@ -106,6 +106,9 @@ if __name__ == "__main__":
     """
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
     model = CNN(num_classes=num_labels).to(device)
+    model.eval()
+    with torch.no_grad():
+        model(torch.randn(1, 3, 64, 64))
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=0)

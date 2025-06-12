@@ -1,5 +1,3 @@
-# model.py
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,11 +10,9 @@ class CNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.dropout = nn.Dropout(0.25)
 
-        
         self.num_classes = num_classes
-        self.fc1 = nn.LazyLinear(512)
+        self.fc1 = nn.LazyLinear(512)   # LazyLinearは初回forwardで初期化される
         self.fc2 = nn.Linear(512, self.num_classes)
-
 
     def _forward_conv(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -26,12 +22,7 @@ class CNN(nn.Module):
     def forward(self, x):
         x = self._forward_conv(x)
         x = x.view(x.size(0), -1)
-
-        if self.fc1 is None:
-            self.fc1 = nn.Linear(x.size(1), 512).to(x.device)
-            self.fc2 = nn.Linear(512, self.num_classes).to(x.device)
-
         x = self.dropout(x)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc1(x))   # 初回forwardでfc1のweightが初期化される
         x = self.fc2(x)
         return x
