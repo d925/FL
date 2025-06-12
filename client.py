@@ -3,7 +3,7 @@ import json
 import flwr as fl
 import torch
 import torch.optim as optim
-from model import MobileNetV2_FL
+from model import CNN
 from utils import get_partitioned_data,num_labels
 from config import num_clients
 import os
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     # --- ここまでGPU初期化追加 ---
     """
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
-    model = MobileNetV2_FL(num_classes=num_labels).to(device)
+    model = CNN(num_classes=num_labels).to(device)
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
