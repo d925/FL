@@ -8,6 +8,8 @@ import os
 import json
 from typing import Tuple, Dict
 from config import num_labels, is_iid
+from PIL import Image
+
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
@@ -136,6 +138,8 @@ def prepare_processed_data(client_id: int, num_clients: int):
             path, label = full_dataset.samples[idx]
             if label not in assigned_labels:
                 continue
+            img = Image.open(path).convert("RGB")
+            img = transforms.Resize((64, 64))(img)  # transform でToTensorはせずPILのまま
             class_dir = os.path.join(base_dir, f"class_{label}")
             os.makedirs(class_dir, exist_ok=True)
             filename = os.path.basename(path)
