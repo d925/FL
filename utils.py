@@ -136,8 +136,6 @@ def prepare_processed_data(client_id: int, num_clients: int):
             path, label = full_dataset.samples[idx]
             if label not in assigned_labels:
                 continue
-            img = Image.open(path).convert("RGB")
-            img = transforms.Resize((64, 64))(img)  # transform でToTensorはせずPILのまま
             class_dir = os.path.join(base_dir, f"class_{label}")
             os.makedirs(class_dir, exist_ok=True)
             filename = os.path.basename(path)
