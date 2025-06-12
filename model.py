@@ -12,9 +12,11 @@ class CNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.dropout = nn.Dropout(0.25)
 
-        self.fc1 = None  # 後で初期化する
-        self.fc2 = None
+        
         self.num_classes = num_classes
+        self.fc1 = nn.LazyLinear(512)
+        self.fc2 = nn.Linear(512, self.num_classes)
+
 
     def _forward_conv(self, x):
         x = self.pool(F.relu(self.conv1(x)))
