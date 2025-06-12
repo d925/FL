@@ -115,7 +115,7 @@ def prepare_label_indices():
 def cache_path(client_id, split):
     return os.path.join(CACHE_DIR, f"client_{client_id}_{split}_dataset.pt")
 
-def get_partitioned_data_cached(client_id: int, num_clients: int):
+def get_partitioned_data(client_id: int, num_clients: int):
     """
     キャッシュ使って前処理高速化。  
     一回目は通常処理してtorch.save()で保存、2回目以降はtorch.load()で読み込み。
