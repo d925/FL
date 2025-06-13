@@ -227,3 +227,17 @@ def prepare_processed_data(client_id: int, num_clients: int):
 
     print(f"Preparing processed test data for client {client_id} ...")
     save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])], test_dir)
+
+def get_partitioned_data(client_id: int, num_clients: int):
+    # 加工済みデータのフォルダ読み込み
+    transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),  # 学習時のみのaugmentation
+        transforms.ToTensor(),
+    ])
+    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
+    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
+
+    train_dataset = ImageFolder(root=train_dir, transform=transform)
+    test_dataset = ImageFolder(root=test_dir, transform=transform)
+
+    return train_dataset, test_dataset
