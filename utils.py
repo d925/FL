@@ -7,7 +7,7 @@ import random
 import os
 import json
 from typing import Tuple, Dict
-from config import num_labels, is_iid
+from config import num_labels, is_iid,num_to_sample
 from PIL import Image
 
 
@@ -53,8 +53,17 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
         if is_iid:
             selected_crops = crop_list[:]  # すべての作物を割り当てる
         else:
-            num_to_sample = random.randint(4, min(6, len(crop_list)))
-            selected_crops = random.sample(crop_list, num_to_sample)
+            # Non-IID仕様：1〜3種類の作物をランダムに割当（重複をなるべく避ける）
+            num_crops = random.randint(1, min(3, len(crop_list)))
+            
+            # すでに使われた crop 数を確認（重複防止のため）
+            used_crops_flat = [crop for crops in crop_assignments.values() for crop in crops]
+            crop_counter = {crop: used_crops_flat.count(crop) for crop in crop_list}
+
+            # 使用頻度が少ないものを優先してサンプリング
+            available_crops = sorted(crop_list, key=lambda x: crop_counter.get(x, 0))
+            selected_crops = random.sample(available_crops[:max(3 * num_clients, len(crop_list))], num_crops)
+            #ここをnon-IID仕様に
         crop_assignments[client_id] = selected_crops
 
         for crop in selected_crops:
