@@ -134,7 +134,7 @@ def prepare_processed_data(client_id: int, num_clients: int):
         return
 
     transform = transforms.Compose([
-        transforms.Resize((256, 256)),
+        transforms.Resize((224, 224)),
         # ランダム反転は学習時だけなのでここでは入れない
         transforms.ToTensor(),
     ])
