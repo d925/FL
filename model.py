@@ -58,7 +58,8 @@ class PMACNN(nn.Module):
         att_cat = torch.cat([att_max, att_avg], dim=1)  # チャンネル方向に連結
 
         # アテンションで強調
-        att_mul = att * att_cat[:, :att.size(1), :, :]  # チャンネル数を合わせて乗算
+        att_cat_upsampled = F.interpolate(att_cat, size=att.shape[2:], mode='bilinear', align_corners=False)
+        att_mul = att * att_cat_upsampled[:, :att.size(1), :, :]  # チャンネル数を合わせて乗算
 
         # グローバルプーリング＋分類
         pooled = self.global_maxpool(att_mul)
