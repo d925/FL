@@ -21,7 +21,7 @@ class PMACNN(nn.Module):
         self.module2_conv3 = nn.Conv2d(64, 128, kernel_size=1)
 
         # === Attentionモジュール ===
-        self.attention_conv = nn.Conv2d(256, 128, kernel_size=3, padding=1)
+        self.attention_conv = nn.Conv2d(384, 128, kernel_size=3, padding=1)
         self.attention_maxpool = nn.MaxPool2d(2)
         self.attention_avgpool = nn.AvgPool2d(2)
 
