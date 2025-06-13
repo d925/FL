@@ -39,7 +39,7 @@ def aggregate_metrics(results):
     return {"accuracy": avg_accuracy, "loss": avg_loss}
 # FedProx 戦略の設定
 strategy = fl.server.strategy.FedProx(
-    fraction_fit=0.5,
+    fraction_fit=1.0,
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
     min_fit_clients=int(num_clients / 2),         # 学習を開始するために最低10クライアントの参加を要求
