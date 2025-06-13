@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     if visible_devices:
-        devices = visible_devices.split(",")
+        devices = visible_devices.strip().split(",")
         assigned_gpu = int(devices[0])  # 先頭のGPUを使う想定
     else:
         assigned_gpu = 0
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     # ここでプロセスのGPUメモリ使用量制限をかける（任意、メモリ足りないなら調整）
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)  # 50%に制限例
+        torch.cuda.set_per_process_memory_fraction(0.3, device=assigned_gpu)  # 50%に制限例
 
     # --- ここまでGPU初期化追加 ---
     
