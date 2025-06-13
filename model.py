@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class PMACNN(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes):
         super().__init__()
         
         # 親子で並列な2つのスケールモジュールを用意
