@@ -52,7 +52,8 @@ strategy = fl.server.strategy.FedProx(
 
 def pretrain_on_shared_dataset():
     print("[Server] Pretraining on shared dataset...")
-    model = CNN.get_model()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = CNN.get_model().to(device)
     model.train()
     loader = get_shared_dataset_loader()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -60,6 +61,7 @@ def pretrain_on_shared_dataset():
 
     for epoch in range(1):
         for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
