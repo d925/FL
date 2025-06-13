@@ -2,16 +2,63 @@
 import torch
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from typing import Optional
 from collections import defaultdict
 import random
 import os
 import json
 from typing import Tuple, Dict
-from config import num_labels, is_iid
+from config import num_labels, is_iid,num_to_sample
+from PIL import Image
+import shutil
+
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
+PROCESSED_DATA_DIR = "./processed_dataset"
+SHARED_DATA_DIR = "./shared_dataset"
+shared_ratio=0.05
+
+def prepare_shared_dataset():
+    if os.path.exists(SHARED_DATA_DIR):
+        print("Shared dataset already prepared.")
+        return
+
+    dataset = ImageFolder(root=DATA_DIR)
+    label_to_indices = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset.samples):
+        label_to_indices[label].append(idx)
+
+    os.makedirs(SHARED_DATA_DIR, exist_ok=True)
+    for label, indices in label_to_indices.items():
+        num_shared = int(len(indices) * shared_ratio)
+        selected_indices = random.sample(indices, num_shared)
+        for idx in selected_indices:
+            path, _ = dataset.samples[idx]
+            label_dir = f"class_{label}"
+            save_label_dir = os.path.join(SHARED_DATA_DIR, label_dir)
+            os.makedirs(save_label_dir, exist_ok=True)
+            filename = os.path.basename(path)
+            shutil.copy(path, os.path.join(save_label_dir, filename))
+
+    print(f"Saved shared dataset to {SHARED_DATA_DIR}")
+def get_shared_dataset_loader() -> DataLoader:
+    if not os.path.exists(SHARED_DATA_DIR):
+        raise FileNotFoundError(f"[ERROR] Shared dataset directory not found: {SHARED_DATA_DIR}")
+
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),  # 必要ならサイズ変更
+        transforms.ToTensor(),
+    ])
+
+    dataset = datasets.ImageFolder(root=SHARED_DATA_DIR, transform=transform)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    print(f"[Server] Loaded shared dataset with {len(dataset)} samples from {SHARED_DATA_DIR}")
+    return loader
+
 
 def group_labels_by_crop(class_to_idx):
     """
@@ -50,8 +97,22 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
         if is_iid:
             selected_crops = crop_list[:]  # すべての作物を割り当てる
         else:
-            num_to_sample = random.randint(2, min(5, len(crop_list)))
-            selected_crops = random.sample(crop_list, num_to_sample)
+            # IDに応じて作物数を決定
+            if client_id <= 2:
+                num_crops = 1
+            elif client_id <= 6:
+                num_crops = 2
+            else:
+                num_crops = 3
+
+            # すでに割り当てられた crop の出現頻度を数える
+            used_crops_flat = [crop for crops in crop_assignments.values() for crop in crops]
+            crop_counter = {crop: used_crops_flat.count(crop) for crop in crop_list}
+
+            # 使用頻度が少ない順に並べて、そこからランダムに選ぶ
+            available_crops = sorted(crop_list, key=lambda x: crop_counter.get(x, 0))
+            selected_crops = random.sample(available_crops[:max(3 * num_clients, len(crop_list))], num_crops)
+
         crop_assignments[client_id] = selected_crops
 
         for crop in selected_crops:
@@ -109,53 +170,60 @@ def prepare_label_indices():
 
     print("Saved label index mapping to JSON.")
 
-def get_partitioned_data(client_id: int, num_clients: int):
-    """
-    各クライアント用にデータセットを抽出する処理  
-    ※各クライアントは自身に割り当てられたグローバルラベルのデータのみを取得する  
-    かつ、ラベルのリマッピングは行わず、元のグローバルラベル（0～num_total_labels-1）として扱う。
-    """
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),  # サイズを統一
-        transforms.RandomCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ToTensor()
-    ])
-    full_dataset = ImageFolder(root=DATA_DIR, transform=transform)
+def prepare_processed_data(client_id: int, num_clients: int):
+    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
+    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
+    if os.path.exists(train_dir) and os.path.exists(test_dir):
+        print(f"Processed data for client {client_id} already exists, skipping generation.")
+        return
 
-    with open(LABEL_INDICES_PATH, "r") as f:
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+    ])
+
+    full_dataset = ImageFolder(root=DATA_DIR)
+    shared_dataset = ImageFolder(root=SHARED_DATA_DIR)
+
+    with open("label_indices.json", "r") as f:
         data = json.load(f)
     train_label_indices = {int(k): v for k, v in data["train"].items()}
     test_label_indices = {int(k): v for k, v in data["test"].items()}
+    label_assignments, _ = generate_label_assignments(num_clients)
+    assigned_labels = label_assignments[client_id]
 
-    label_assignments, label_to_clients = generate_label_assignments(num_clients)
-    assigned_labels = label_assignments[client_id]  # このクライアントが扱うグローバルラベル
+    def save_subset(indices, base_dir):
+        for idx in indices:
+            path, label = full_dataset.samples[idx]
+            if label not in assigned_labels:
+                continue
+            img = Image.open(path).convert("RGB")
+            img = transforms.Resize((64, 64))(img)
+            class_dir = os.path.join(base_dir, f"class_{label}")
+            os.makedirs(class_dir, exist_ok=True)
+            filename = os.path.basename(path)
+            img.save(os.path.join(class_dir, filename))
 
-    def extract_subset(label_indices_dict):
-        indices = []
+    def mix_shared_data(base_dir):
+        label_to_paths = defaultdict(list)
+        for path, label in shared_dataset.samples:
+            label_to_paths[label].append(path)
+
         for label in assigned_labels:
-            if label not in label_indices_dict:
-                continue
-            all_indices = label_indices_dict[label]
-            client_list = label_to_clients[label]
-            if client_id not in client_list:
-                continue
-            client_index = client_list.index(client_id)
-            per_client = len(all_indices) // len(client_list)
-            # 余りがある場合は、最後のクライアントに全て割り当て
-            if client_index < len(client_list) - 1:
-                start = client_index * per_client
-                end = start + per_client
-            else:
-                start = client_index * per_client
-                end = len(all_indices)
-            indices.extend(all_indices[start:end])
-        # ラベルリマッピングはせず、そのままグローバルラベルとして扱う
-        subset = torch.utils.data.Subset(full_dataset, indices)
-        return subset
+            shared_paths = label_to_paths.get(label, [])
+            num_to_add = int(len(shared_paths) * 0.5)
+            selected_paths = random.sample(shared_paths, min(num_to_add, len(shared_paths)))
+            class_dir = os.path.join(base_dir, f"class_{label}")
+            os.makedirs(class_dir, exist_ok=True)
+            for path in selected_paths:
+                img = Image.open(path).convert("RGB")
+                img = transforms.Resize((64, 64))(img)
+                filename = f"shared_{os.path.basename(path)}"
+                img.save(os.path.join(class_dir, filename))
 
-    client_train = extract_subset(train_label_indices)
-    client_test = extract_subset(test_label_indices)
+    print(f"Preparing processed train data for client {client_id} ...")
+    save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])], train_dir)
+    mix_shared_data(train_dir)
 
-    return client_train, client_test
+    print(f"Preparing processed test data for client {client_id} ...")
+    save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])], test_dir)

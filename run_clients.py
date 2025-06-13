@@ -10,9 +10,9 @@ prepare_label_indices()
 
 processes = []
 for client_id in range(num_clients):
-    #gpu_id = client_id % torch.cuda.device_count()  # GPU数に応じて割り振り
-    #env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu_id))
-    proc = subprocess.Popen(["python", "client.py", str(client_id)])
+    gpu_id = client_id % torch.cuda.device_count()  # GPU数に応じて割り振り
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu_id))
+    proc = subprocess.Popen(["python", "client.py", str(client_id)], env=env)
     processes.append(proc)
 
 for proc in processes:

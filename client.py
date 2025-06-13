@@ -3,8 +3,8 @@ import json
 import flwr as fl
 import torch
 import torch.optim as optim
-from model import MobileNetV2_FL
-from utils import get_partitioned_data,num_labels
+from model import CNN
+from utils import get_partitioned_data,prepare_processed_data,num_labels
 from config import num_clients
 import os
 
@@ -34,10 +34,6 @@ class FLClient(fl.client.NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
-        for _, target in self.trainloader:
-            assert (target >= 0).all(), "💥 target に負の値がある"
-            assert (target < self.model.classifier[-1].out_features).all(), "💥 target が num_classes を超えてる"
-            break
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
@@ -46,7 +42,6 @@ class FLClient(fl.client.NumPyClient):
 
         for _ in range(1):
             for data, target in self.trainloader:
-                print("learning")
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
@@ -62,7 +57,6 @@ class FLClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         # evaluate関数内の最初の方に追加
-        print("e")
         with torch.no_grad():
             all_labels = []
             for _, target in self.testloader:
@@ -70,8 +64,7 @@ class FLClient(fl.client.NumPyClient):
             max_label = max(all_labels)
             min_label = min(all_labels)
             print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
-            assert max_label < self.model.classifier[1].out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
-        print("f")
+            assert max_label < self.model.fc2.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
@@ -90,12 +83,12 @@ class FLClient(fl.client.NumPyClient):
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
-    """
+    
     # --- ここからGPU初期化追加 ---
     # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     if visible_devices:
-        devices = visible_devices.split(",")
+        devices = visible_devices.strip().split(",")
         assigned_gpu = int(devices[0])  # 先頭のGPUを使う想定
     else:
         assigned_gpu = 0
@@ -105,12 +98,16 @@ if __name__ == "__main__":
     # ここでプロセスのGPUメモリ使用量制限をかける（任意、メモリ足りないなら調整）
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)  # 50%に制限例
+        torch.cuda.set_per_process_memory_fraction(0.1, device=assigned_gpu)  # 50%に制限例
 
     # --- ここまでGPU初期化追加 ---
-    """
+    
+    prepare_processed_data(client_id, num_clients)
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
-    model = MobileNetV2_FL(num_classes=num_labels).to(device)
+    model = CNN(num_classes=num_labels).to(device)
+    model.eval()
+    with torch.no_grad():
+        model(torch.randn(1, 3, 64, 64).to(device))
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
