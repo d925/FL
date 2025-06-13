@@ -4,7 +4,7 @@ from flwr.server import ServerConfig
 import torch
 from model import CNN
 from config import num_rounds,num_clients
-from utils import get_shared_dataset_loader
+from utils import get_shared_dataset_loader,prepare_shared_dataset
 import json
 import os
 
@@ -71,6 +71,7 @@ def pretrain_on_shared_dataset():
 
 
 if __name__ == "__main__":
+    prepare_shared_dataset()
     initial_parameters = pretrain_on_shared_dataset()
 
     strategy = fl.server.strategy.FedProx(
