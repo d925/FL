@@ -42,7 +42,6 @@ class FLClient(fl.client.NumPyClient):
 
         for _ in range(1):
             for data, target in self.trainloader:
-                print("learning")
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
@@ -66,7 +65,6 @@ class FLClient(fl.client.NumPyClient):
             min_label = min(all_labels)
             print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
             assert max_label < self.model.fc2.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
-        print("f")
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
