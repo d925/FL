@@ -7,7 +7,7 @@ import random
 import os
 import json
 from typing import Tuple, Dict
-from config import num_labels, is_iid,num_to_sample
+from config import num_labels, is_iid
 from PIL import Image
 
 
@@ -53,22 +53,8 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
         if is_iid:
             selected_crops = crop_list[:]  # すべての作物を割り当てる
         else:
-            # IDに応じて作物数を決定
-            if client_id <= 2:
-                num_crops = 1
-            elif client_id <= 6:
-                num_crops = 2
-            else:
-                num_crops = 3
-
-            # すでに割り当てられた crop の出現頻度を数える
-            used_crops_flat = [crop for crops in crop_assignments.values() for crop in crops]
-            crop_counter = {crop: used_crops_flat.count(crop) for crop in crop_list}
-
-            # 使用頻度が少ない順に並べて、そこからランダムに選ぶ
-            available_crops = sorted(crop_list, key=lambda x: crop_counter.get(x, 0))
-            selected_crops = random.sample(available_crops[:max(3 * num_clients, len(crop_list))], num_crops)
-
+            num_to_sample = random.randint(4, min(6, len(crop_list)))
+            selected_crops = random.sample(crop_list, num_to_sample)
         crop_assignments[client_id] = selected_crops
 
         for crop in selected_crops:
@@ -134,7 +120,7 @@ def prepare_processed_data(client_id: int, num_clients: int):
         return
 
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((256, 256)),
         # ランダム反転は学習時だけなのでここでは入れない
         transforms.ToTensor(),
     ])
