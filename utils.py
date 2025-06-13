@@ -2,6 +2,8 @@
 import torch
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from typing import Optional
 from collections import defaultdict
 import random
 import os
@@ -9,12 +11,54 @@ import json
 from typing import Tuple, Dict
 from config import num_labels, is_iid,num_to_sample
 from PIL import Image
+import shutil
 
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 PROCESSED_DATA_DIR = "./processed_dataset"
+SHARED_DATA_DIR = "./shared_dataset"
+shared_ratio=0.05
+
+def prepare_shared_dataset():
+    if os.path.exists(SHARED_DATA_DIR):
+        print("Shared dataset already prepared.")
+        return
+
+    dataset = ImageFolder(root=DATA_DIR)
+    label_to_indices = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset.samples):
+        label_to_indices[label].append(idx)
+
+    os.makedirs(SHARED_DATA_DIR, exist_ok=True)
+    for label, indices in label_to_indices.items():
+        num_shared = int(len(indices) * shared_ratio)
+        selected_indices = random.sample(indices, num_shared)
+        for idx in selected_indices:
+            path, _ = dataset.samples[idx]
+            label_dir = f"class_{label}"
+            save_label_dir = os.path.join(SHARED_DATA_DIR, label_dir)
+            os.makedirs(save_label_dir, exist_ok=True)
+            filename = os.path.basename(path)
+            shutil.copy(path, os.path.join(save_label_dir, filename))
+
+    print(f"Saved shared dataset to {SHARED_DATA_DIR}")
+def get_shared_dataset_loader() -> DataLoader:
+    if not os.path.exists(SHARED_DATA_DIR):
+        raise FileNotFoundError(f"[ERROR] Shared dataset directory not found: {SHARED_DATA_DIR}")
+
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),  # 必要ならサイズ変更
+        transforms.ToTensor(),
+    ])
+
+    dataset = datasets.ImageFolder(root=SHARED_DATA_DIR, transform=transform)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    print(f"[Server] Loaded shared dataset with {len(dataset)} samples from {SHARED_DATA_DIR}")
+    return loader
+
 
 def group_labels_by_crop(class_to_idx):
     """
@@ -135,11 +179,12 @@ def prepare_processed_data(client_id: int, num_clients: int):
 
     transform = transforms.Compose([
         transforms.Resize((64, 64)),
-        # ランダム反転は学習時だけなのでここでは入れない
         transforms.ToTensor(),
     ])
 
     full_dataset = ImageFolder(root=DATA_DIR)
+    shared_dataset = ImageFolder(root=SHARED_DATA_DIR)
+
     with open("label_indices.json", "r") as f:
         data = json.load(f)
     train_label_indices = {int(k): v for k, v in data["train"].items()}
@@ -153,29 +198,32 @@ def prepare_processed_data(client_id: int, num_clients: int):
             if label not in assigned_labels:
                 continue
             img = Image.open(path).convert("RGB")
-            img = transforms.Resize((64, 64))(img)  # transform でToTensorはせずPILのまま
+            img = transforms.Resize((64, 64))(img)
             class_dir = os.path.join(base_dir, f"class_{label}")
             os.makedirs(class_dir, exist_ok=True)
             filename = os.path.basename(path)
-            save_path = os.path.join(class_dir, filename)
-            img.save(save_path)
+            img.save(os.path.join(class_dir, filename))
+
+    def mix_shared_data(base_dir):
+        label_to_paths = defaultdict(list)
+        for path, label in shared_dataset.samples:
+            label_to_paths[label].append(path)
+
+        for label in assigned_labels:
+            shared_paths = label_to_paths.get(label, [])
+            num_to_add = int(len(shared_paths) * 0.5)
+            selected_paths = random.sample(shared_paths, min(num_to_add, len(shared_paths)))
+            class_dir = os.path.join(base_dir, f"class_{label}")
+            os.makedirs(class_dir, exist_ok=True)
+            for path in selected_paths:
+                img = Image.open(path).convert("RGB")
+                img = transforms.Resize((64, 64))(img)
+                filename = f"shared_{os.path.basename(path)}"
+                img.save(os.path.join(class_dir, filename))
 
     print(f"Preparing processed train data for client {client_id} ...")
     save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])], train_dir)
+    mix_shared_data(train_dir)
+
     print(f"Preparing processed test data for client {client_id} ...")
     save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])], test_dir)
-
-
-def get_partitioned_data(client_id: int, num_clients: int):
-    # 加工済みデータのフォルダ読み込み
-    transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),  # 学習時のみのaugmentation
-        transforms.ToTensor(),
-    ])
-    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
-    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
-
-    train_dataset = ImageFolder(root=train_dir, transform=transform)
-    test_dataset = ImageFolder(root=test_dir, transform=transform)
-
-    return train_dataset, test_dataset

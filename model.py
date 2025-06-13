@@ -26,3 +26,12 @@ class CNN(nn.Module):
         x = F.relu(self.fc1(x))   # 初回forwardでfc1のweightが初期化される
         x = self.fc2(x)
         return x
+    def get_model(num_classes: int = 38):  # PlantVillage全体のクラス数に合わせる
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = CNN(num_classes=num_classes).to(device)
+
+    # LazyLinear を初期化するためにダミーデータで1回 forward
+        dummy_input = torch.randn(1, 3, 64, 64).to(device)
+        model(dummy_input)
+    
+        return model

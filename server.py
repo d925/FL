@@ -1,7 +1,10 @@
 # server.py
 import flwr as fl
 from flwr.server import ServerConfig
+import torch
+from model import CNN
 from config import num_rounds,num_clients
+from utils import get_shared_dataset_loader
 import json
 import os
 
@@ -47,7 +50,41 @@ strategy = fl.server.strategy.FedProx(
     proximal_mu=0.01,
 )
 
+def pretrain_on_shared_dataset():
+    print("[Server] Pretraining on shared dataset...")
+    model = CNN.get_model()
+    model.train()
+    loader = get_shared_dataset_loader()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    for epoch in range(1):
+        for images, labels in loader:
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+    print("[Server] Pretraining complete.")
+    return model.state_dict()
+
+
 if __name__ == "__main__":
+    initial_parameters = pretrain_on_shared_dataset()
+
+    strategy = fl.server.strategy.FedProx(
+        fraction_fit=1.0,
+        fraction_evaluate=1.0,
+        evaluate_metrics_aggregation_fn=aggregate_metrics,
+        min_fit_clients=int(num_clients / 2),
+        min_available_clients=num_clients,
+        proximal_mu=0.01,
+        initial_parameters=fl.common.ndarrays_to_parameters([
+            t.detach().cpu().numpy() for t in initial_parameters.values()
+        ])
+    )
+
     fl.server.start_server(
         server_address="localhost:8080",
         config=ServerConfig(num_rounds=num_rounds),
