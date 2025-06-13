@@ -53,7 +53,7 @@ def get_shared_dataset_loader() -> DataLoader:
         transforms.ToTensor(),
     ])
 
-    dataset = datasets.ImageFolder(root=SHARED_DATA_DIR, transform=transform)
+    dataset = ImageFolder(root=SHARED_DATA_DIR, transform=transform)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     print(f"[Server] Loaded shared dataset with {len(dataset)} samples from {SHARED_DATA_DIR}")
