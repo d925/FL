@@ -98,7 +98,7 @@ if __name__ == "__main__":
     # ここでプロセスのGPUメモリ使用量制限をかける（任意、メモリ足りないなら調整）
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.3, device=assigned_gpu)  # 50%に制限例
+        torch.cuda.set_per_process_memory_fraction(0.1, device=assigned_gpu)  # 50%に制限例
 
     # --- ここまでGPU初期化追加 ---
     
