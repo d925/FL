@@ -4,7 +4,7 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import PMACNN
-from utils import get_partitioned_data,prepare_processed_data,num_labels
+from utils import get_partitioned_data, prepare_processed_data, num_labels
 from config import num_clients
 import os
 
@@ -56,7 +56,6 @@ class FLClient(fl.client.NumPyClient):
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
-        # evaluate関数内の最初の方に追加
         with torch.no_grad():
             all_labels = []
             for _, target in self.testloader:
@@ -64,7 +63,8 @@ class FLClient(fl.client.NumPyClient):
             max_label = max(all_labels)
             min_label = min(all_labels)
             print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
-            assert max_label < self.model.fc2.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
+            # 修正ポイント：fc2 → fc
+            assert max_label < self.model.fc.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
@@ -85,7 +85,6 @@ if __name__ == "__main__":
     client_id = int(sys.argv[1])
     
     # --- ここからGPU初期化追加 ---
-    # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     if visible_devices:
         devices = visible_devices.strip().split(",")
@@ -95,15 +94,14 @@ if __name__ == "__main__":
 
     torch.cuda.set_device(assigned_gpu)
 
-    # ここでプロセスのGPUメモリ使用量制限をかける（任意、メモリ足りないなら調整）
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.1, device=assigned_gpu)  # 50%に制限例
+        torch.cuda.set_per_process_memory_fraction(0.1, device=assigned_gpu)
 
     # --- ここまでGPU初期化追加 ---
     
     prepare_processed_data(client_id, num_clients)
-    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = PMACNN(num_classes=num_labels).to(device)
     model.eval()
     with torch.no_grad():
