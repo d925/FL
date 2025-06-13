@@ -85,7 +85,7 @@ class FLClient(fl.client.NumPyClient):
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
-    """
+    
     # --- ここからGPU初期化追加 ---
     # 親プロセスから渡されたCUDA_VISIBLE_DEVICESに合わせてGPU固定
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)  # 50%に制限例
 
     # --- ここまでGPU初期化追加 ---
-    """
+    
     prepare_processed_data(client_id, num_clients)
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
     model = CNN(num_classes=num_labels).to(device)
