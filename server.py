@@ -82,7 +82,7 @@ if __name__ == "__main__":
         evaluate_metrics_aggregation_fn=aggregate_metrics,
         min_fit_clients=int(num_clients / 2),
         min_available_clients=num_clients,
-        proximal_mu=0.01,
+        proximal_mu=0,
         initial_parameters=fl.common.ndarrays_to_parameters([
             t.detach().cpu().numpy() for t in initial_parameters.values()
         ])
