@@ -35,6 +35,7 @@ class FLClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01) 
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
         self.model.train()
@@ -53,6 +54,7 @@ class FLClient(fl.client.NumPyClient):
                 loss.backward()
                 self.optimizer.step()
         self.log("Finished local training with FedProx")
+        torch.cuda.empty_cache()
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
