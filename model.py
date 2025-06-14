@@ -2,69 +2,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class PMACNN(nn.Module):
+class SimpleCNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),  # 入力3ch → 32ch
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),  # 画像サイズを半分に
 
-        self.module1 = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1), 
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)
-        )
-        self.module1_branch = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)
-        )
 
-        self.module2 = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=5, padding=2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1), 
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)
         )
-        self.module2_branch = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)
-        )
-
-        self.attention_reduce = nn.Conv2d(384, 128, kernel_size=3, padding=1)
-        self.attention_post = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-
-        self.global_maxpool = nn.AdaptiveMaxPool2d(1)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)  # 最後に1x1に縮小
         self.dropout = nn.Dropout(0.25)
-        self.fc = nn.Linear(128, num_classes)
+        self.classifier = nn.Linear(128, num_classes)
 
     def forward(self, x):
-        m1 = self.module1(x)
-        m1_branch_out = self.module1_branch(m1)
-    
-        # 空間サイズをm1に合わせる
-        m1_branch_upsampled = F.interpolate(m1_branch_out, size=m1.shape[2:], mode='bilinear', align_corners=False)
-
-        m1_concat = torch.cat([m1, m1_branch_upsampled], dim=1)
-
-        m2 = self.module2(x)
-        m2_branch_out = self.module2_branch(m2)
-        m2_branch_upsampled = F.interpolate(m2_branch_out, size=m2.shape[2:], mode='bilinear', align_corners=False)
-        m2_concat = torch.cat([m2, m2_branch_upsampled], dim=1)
-
-        combined = torch.cat([m1_concat, m2_concat], dim=1)
-        att = F.relu(self.attention_reduce(combined))
-
-        att_max = F.max_pool2d(att, 2)
-        att_avg = F.avg_pool2d(att, 2)
-        att_cat = torch.cat([att_max, att_avg], dim=1)
-        att_cat_upsampled = F.interpolate(att_cat, size=att.shape[2:], mode='bilinear', align_corners=False)
-
-        att_weighted = att * att_cat_upsampled[:, :att.size(1), :, :]
-        att_weighted = F.relu(self.attention_post(att_weighted))
-
-        pooled = self.global_maxpool(att_weighted).view(att.size(0), -1)
-        return self.fc(self.dropout(pooled))
+        x = self.features(x)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        x = self.classifier(x)
+        return x

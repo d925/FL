@@ -5,7 +5,7 @@ import json
 import flwr as fl
 import torch
 import torch.optim as optim
-from model import PMACNN
+from model import SimpleCNN
 from utils import get_partitioned_data, num_labels
 from config import num_clients
 import os
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     # --- ここまでGPU初期化追加 ---
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = PMACNN(num_classes=num_labels).to(device)
+    model = SimpleCNN(num_classes=num_labels).to(device)
     model.eval()
     with torch.no_grad():
         model(torch.randn(1, 3, 256, 256).to(device))
