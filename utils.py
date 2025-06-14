@@ -59,7 +59,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             start += count
 
     # ディレクトリに画像を保存
-    transform = transforms.Resize((256, 256))
+    transform = transforms.Resize((64, 64))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
