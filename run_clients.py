@@ -1,12 +1,11 @@
 # main.py
 import subprocess
 from config import num_clients
-from utils import generate_and_save_dirichlet_partitioned_data, prepare_label_indices
+from utils import generate_and_save_dirichlet_partitioned_data
 import torch
 import os
 
 generate_and_save_dirichlet_partitioned_data(num_clients)
-prepare_label_indices()
 
 processes = []
 for client_id in range(num_clients):
