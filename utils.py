@@ -17,7 +17,7 @@ DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 PROCESSED_DATA_DIR = "./processed_dataset"
 
 
-def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = 5.0):
+def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = 0.5):
     if os.path.exists(PROCESSED_DATA_DIR):
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
