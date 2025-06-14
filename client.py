@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)
+        torch.cuda.set_per_process_memory_fraction(0.1, device=assigned_gpu)
 
     # --- ここまでGPU初期化追加 ---
     
