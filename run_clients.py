@@ -1,13 +1,12 @@
 # main.py
 import subprocess
 from config import num_clients
-from utils import generate_label_assignments, prepare_label_indices
+from utils import generate_and_save_dirichlet_partitioned_data
 import torch
 import os
 
-generate_label_assignments(num_clients)
-prepare_label_indices()
 
+generate_and_save_dirichlet_partitioned_data(num_clients)
 processes = []
 for client_id in range(num_clients):
     gpu_id = client_id % torch.cuda.device_count()  # GPU数に応じて割り振り

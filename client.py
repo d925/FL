@@ -4,7 +4,7 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import CNN
-from utils import get_partitioned_data,prepare_processed_data,num_labels
+from utils import get_partitioned_data,num_labels
 from config import num_clients
 import os
 
@@ -102,7 +102,6 @@ if __name__ == "__main__":
 
     # --- ここまでGPU初期化追加 ---
     
-    prepare_processed_data(client_id, num_clients)
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
     model = CNN(num_classes=num_labels).to(device)
     model.eval()
