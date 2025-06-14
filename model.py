@@ -43,13 +43,17 @@ class PMACNN(nn.Module):
 
     def forward(self, x):
         m1 = self.module1(x)
-        print("m1.shape:", m1.shape)
-        print("module1_branch(m1).shape:", self.module1_branch(m1).shape)
+        m1_branch_out = self.module1_branch(m1)
+    
+        # 空間サイズをm1に合わせる
+        m1_branch_upsampled = F.interpolate(m1_branch_out, size=m1.shape[2:], mode='bilinear', align_corners=False)
 
-        m1_concat = torch.cat([m1, self.module1_branch(m1)], dim=1)
+        m1_concat = torch.cat([m1, m1_branch_upsampled], dim=1)
 
         m2 = self.module2(x)
-        m2_concat = torch.cat([m2, self.module2_branch(m2)], dim=1)
+        m2_branch_out = self.module2_branch(m2)
+        m2_branch_upsampled = F.interpolate(m2_branch_out, size=m2.shape[2:], mode='bilinear', align_corners=False)
+        m2_concat = torch.cat([m2, m2_branch_upsampled], dim=1)
 
         combined = torch.cat([m1_concat, m2_concat], dim=1)
         att = F.relu(self.attention_reduce(combined))
