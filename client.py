@@ -84,21 +84,22 @@ class FLClient(fl.client.NumPyClient):
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
     
-    # --- ここからGPU初期化追加 ---
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    if visible_devices:
-        devices = visible_devices.strip().split(",")
-        assigned_gpu = int(devices[0])  # 先頭のGPUを使う想定
-    else:
-        assigned_gpu = 0
+if visible_devices:
+    devices = [d.strip() for d in visible_devices.split(",") if d.strip()]
+    assigned_gpu = int(devices[0]) if devices else 0
+else:
+    assigned_gpu = 0
 
+if torch.cuda.is_available():
     torch.cuda.set_device(assigned_gpu)
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.05, device=assigned_gpu)
+    # === 2. キャッシュクリア＆断片化対策 ===
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
 
-    # --- ここまでGPU初期化追加 ---
+    # === 3. メモリ管理: allocator設定（断片化に強くなる）===
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = PMACNN(num_classes=num_labels).to(device)
