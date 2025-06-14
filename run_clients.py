@@ -1,11 +1,11 @@
 # main.py
 import subprocess
 from config import num_clients
-from utils import generate_label_assignments, prepare_label_indices
+from utils import generate_and_save_dirichlet_partitioned_data, prepare_label_indices
 import torch
 import os
 
-generate_label_assignments(num_clients)
+generate_and_save_dirichlet_partitioned_data(num_clients)
 prepare_label_indices()
 
 processes = []

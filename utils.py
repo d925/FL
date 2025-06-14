@@ -17,133 +17,90 @@ DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 PROCESSED_DATA_DIR = "./processed_dataset"
 
 
-def generate_label_assignments(num_clients: int, alpha: float = 0.5) -> Tuple[Dict[int, list], Dict[int, list]]:
-    """
-    各クライアントにラベルを Dirichlet 分布に基づいて割り当てる。
-    α が小さいほど各クライアントのラベル分布は偏る（強い非IID）。
-    """
-    if os.path.exists(LABEL_ASSIGN_PATH):
-        with open(LABEL_ASSIGN_PATH, "r") as f:
-            data = json.load(f)
-        label_assignments = {int(k): v for k, v in data["label_assignments"].items()}
-        label_to_clients = {int(k): v for k, v in data["label_to_clients"].items()}
-        return label_assignments, label_to_clients
-
+def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = 0.5):
+    if os.path.exists(PROCESSED_DATA_DIR):
+        # クライアントごとのフォルダが最低1つでもあればスキップ
+        client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
+        if len(client_dirs) >= 1:
+            print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
+            return
+    
     dataset = ImageFolder(root=DATA_DIR)
     class_to_idx = dataset.class_to_idx
     num_classes = len(class_to_idx)
 
-    # クラスごとのインデックス収集
+    # クラスごとのサンプルインデックス収集
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
         label_to_indices[label].append(idx)
 
-    label_assignments = defaultdict(list)
+    # クライアントごとのサンプル保持領域
+    client_indices = defaultdict(list)
+    client_labels = defaultdict(set)
+
+    # Dirichlet に基づくラベルごとのクライアント分配
+    for label in range(num_classes):
+        indices = label_to_indices[label]
+        np.random.shuffle(indices)
+
+        proportions = np.random.dirichlet([alpha] * num_clients)
+        proportions = (proportions * len(indices)).astype(int)
+        # 足りない分は最大のところに足す
+        while proportions.sum() < len(indices):
+            proportions[np.argmax(proportions)] += 1
+
+        start = 0
+        for client_id, count in enumerate(proportions):
+            if count == 0:
+                continue
+            subset = indices[start:start + count]
+            client_indices[client_id].extend(subset)
+            client_labels[client_id].add(label)
+            start += count
+
+    # ディレクトリに画像を保存
+    transform = transforms.Resize((64, 64))
+    for client_id in range(num_clients):
+        for mode in ["train", "test"]:
+            save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
+            os.makedirs(save_base, exist_ok=True)
+
+        indices = client_indices[client_id]
+        np.random.shuffle(indices)
+        split = int(0.8 * len(indices))
+        train_indices = indices[:split]
+        test_indices = indices[split:]
+
+        def save_images(subset, base_dir):
+            for idx in subset:
+                path, label = dataset.samples[idx]
+                img = Image.open(path).convert("RGB")
+                img = transform(img)
+                class_dir = os.path.join(base_dir, f"class_{label}")
+                os.makedirs(class_dir, exist_ok=True)
+                filename = os.path.basename(path)
+                img.save(os.path.join(class_dir, filename))
+
+        save_images(train_indices, os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}"))
+        save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}"))
+
+    # 割り当てラベルを保存
+    label_assignments = {cid: sorted(list(labels)) for cid, labels in client_labels.items()}
     label_to_clients = defaultdict(list)
-
-    if is_iid:
-        # IID の場合：全クライアントにすべてのラベルを与える
-        for client_id in range(num_clients):
-            label_assignments[client_id] = list(range(num_classes))
-            for label in range(num_classes):
-                label_to_clients[label].append(client_id)
-    else:
-        # 非IID：Dirichlet 分布に従って割り当て
-        distribution = np.random.dirichlet([alpha] * num_clients, num_classes)
-        for label in range(num_classes):
-            proportions = distribution[label]
-            for client_id, prob in enumerate(proportions):
-                if prob > 0.001:  # 微小な割当ては除外
-                    label_assignments[client_id].append(label)
-                    label_to_clients[label].append(client_id)
-
-    used_labels = set()
-    for labels in label_assignments.values():
-        used_labels.update(labels)
+    for cid, labels in label_assignments.items():
+        for label in labels:
+            label_to_clients[label].append(cid)
 
     with open(LABEL_ASSIGN_PATH, "w") as f:
         json.dump({
             "label_assignments": {str(k): v for k, v in label_assignments.items()},
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
-            "num_total_labels": len(used_labels),
+            "num_total_labels": num_classes,
         }, f, indent=2)
 
     print("=== Dirichlet-based Client Label Assignments ===")
     for cid in range(num_clients):
         print(f"Client {cid}: Labels {sorted(label_assignments[cid])}")
-
-    return label_assignments, label_to_clients
-
-
-def prepare_label_indices():
-    """
-    各ラベルのインデックスリストを 80:20 で分割して JSON に保存。
-    既にファイルが存在する場合は再計算を行わない。
-    """
-    if os.path.exists(LABEL_INDICES_PATH):
-        print("Label indices already prepared.")
-        return
-
-    dataset = ImageFolder(root=DATA_DIR)
-    label_to_indices = defaultdict(list)
-    for idx, (_, label) in enumerate(dataset):
-        label_to_indices[label].append(idx)
-
-    train = {}
-    test = {}
-
-    for label, indices in label_to_indices.items():
-        random.shuffle(indices)
-        split = int(0.8 * len(indices))
-        train[label] = indices[:split]
-        test[label] = indices[split:]
-
-    with open(LABEL_INDICES_PATH, "w") as f:
-        json.dump({
-            "train": {str(k): v for k, v in train.items()},
-            "test": {str(k): v for k, v in test.items()},
-        }, f, indent=2)
-
-    print("Saved label index mapping to JSON.")
-
-def prepare_processed_data(client_id: int, num_clients: int):
-    train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
-    test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
-    if os.path.exists(train_dir) and os.path.exists(test_dir):
-        print(f"Processed data for client {client_id} already exists, skipping generation.")
-        return
-
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        # ランダム反転は学習時だけなのでここでは入れない
-        transforms.ToTensor(),
-    ])
-
-    full_dataset = ImageFolder(root=DATA_DIR)
-    with open("label_indices.json", "r") as f:
-        data = json.load(f)
-    train_label_indices = {int(k): v for k, v in data["train"].items()}
-    test_label_indices = {int(k): v for k, v in data["test"].items()}
-    label_assignments, _ = generate_label_assignments(num_clients)
-    assigned_labels = label_assignments[client_id]
-
-    def save_subset(indices, base_dir):
-        for idx in indices:
-            path, label = full_dataset.samples[idx]
-            if label not in assigned_labels:
-                continue
-            img = Image.open(path).convert("RGB")
-            img = transforms.Resize((64, 64))(img)  # transform でToTensorはせずPILのまま
-            class_dir = os.path.join(base_dir, f"class_{label}")
-            os.makedirs(class_dir, exist_ok=True)
-            filename = os.path.basename(path)
-            save_path = os.path.join(class_dir, filename)
-            img.save(save_path)
-
-    print(f"Preparing processed train data for client {client_id} ...")
-    save_subset([idx for label in assigned_labels for idx in train_label_indices.get(label, [])], train_dir)
-    print(f"Preparing processed test data for client {client_id} ...")
-    save_subset([idx for label in assigned_labels for idx in test_label_indices.get(label, [])], test_dir)
 
 
 def get_partitioned_data(client_id: int, num_clients: int):
