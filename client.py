@@ -4,7 +4,7 @@ import flwr as fl
 import torch
 import torch.optim as optim
 from model import PMACNN
-from utils import get_partitioned_data, prepare_processed_data, num_labels
+from utils import get_partitioned_data, num_labels
 from config import num_clients
 import os
 
