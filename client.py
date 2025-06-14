@@ -104,7 +104,7 @@ if __name__ == "__main__":
     model = SimpleCNN(num_classes=num_labels).to(device)
     model.eval()
     with torch.no_grad():
-        model(torch.randn(1, 3, 256, 256).to(device))
+        model(torch.randn(1, 3, 64, 64).to(device))
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=0)
