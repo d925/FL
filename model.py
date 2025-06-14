@@ -43,6 +43,9 @@ class PMACNN(nn.Module):
 
     def forward(self, x):
         m1 = self.module1(x)
+        print("m1.shape:", m1.shape)
+        print("module1_branch(m1).shape:", self.module1_branch(m1).shape)
+
         m1_concat = torch.cat([m1, self.module1_branch(m1)], dim=1)
 
         m2 = self.module2(x)
