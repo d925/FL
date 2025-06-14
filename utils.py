@@ -9,28 +9,18 @@ import json
 from typing import Tuple, Dict
 from config import num_labels, is_iid
 from PIL import Image
-
+import numpy as np  # 追加
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 PROCESSED_DATA_DIR = "./processed_dataset"
 
-def group_labels_by_crop(class_to_idx):
-    """
-    辞書のキー（クラス名）から「作物名」を抽出し、作物ごとのラベル（正しいインデックス）を集約する。
-    修正前は enumerate() により添字を使用していたため、正しいインデックスが得られなかった。
-    """
-    crop_to_labels = defaultdict(list)
-    for class_name, idx in class_to_idx.items():
-        crop = class_name.split("___")[0]
-        crop_to_labels[crop].append(idx)
-    return crop_to_labels
 
-def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[int, list]]:
+def generate_label_assignments(num_clients: int, alpha: float = 0.5) -> Tuple[Dict[int, list], Dict[int, list]]:
     """
-    各クライアントにラベルを割り当てる。
-    IID の場合は全作物（＝すべてのラベル）を割り当て、非IID の場合はランダムに 1〜min(3, len(crop_list)) 個の作物を選択する。
+    各クライアントにラベルを Dirichlet 分布に基づいて割り当てる。
+    α が小さいほど各クライアントのラベル分布は偏る（強い非IID）。
     """
     if os.path.exists(LABEL_ASSIGN_PATH):
         with open(LABEL_ASSIGN_PATH, "r") as f:
@@ -41,45 +31,49 @@ def generate_label_assignments(num_clients: int) -> Tuple[Dict[int, list], Dict[
 
     dataset = ImageFolder(root=DATA_DIR)
     class_to_idx = dataset.class_to_idx
-    crop_to_labels = group_labels_by_crop(class_to_idx)
-    crop_list = list(crop_to_labels.keys())
+    num_classes = len(class_to_idx)
+
+    # クラスごとのインデックス収集
+    label_to_indices = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset.samples):
+        label_to_indices[label].append(idx)
 
     label_assignments = defaultdict(list)
     label_to_clients = defaultdict(list)
 
-    # Non-IID構成：各クライアントに1〜min(3, len(crop_list))作物を割り当て、その作物のラベルを取得
-    crop_assignments = {}
-    for client_id in range(num_clients):
-        if is_iid:
-            selected_crops = crop_list[:]  # すべての作物を割り当てる
-        else:
-            num_to_sample = random.randint(1, min(3, len(crop_list)))
-            selected_crops = random.sample(crop_list, num_to_sample)
-        crop_assignments[client_id] = selected_crops
-
-        for crop in selected_crops:
-            for label in crop_to_labels[crop]:
-                label_assignments[client_id].append(label)
+    if is_iid:
+        # IID の場合：全クライアントにすべてのラベルを与える
+        for client_id in range(num_clients):
+            label_assignments[client_id] = list(range(num_classes))
+            for label in range(num_classes):
                 label_to_clients[label].append(client_id)
+    else:
+        # 非IID：Dirichlet 分布に従って割り当て
+        distribution = np.random.dirichlet([alpha] * num_clients, num_classes)
+        for label in range(num_classes):
+            proportions = distribution[label]
+            for client_id, prob in enumerate(proportions):
+                if prob > 0.001:  # 微小な割当ては除外
+                    label_assignments[client_id].append(label)
+                    label_to_clients[label].append(client_id)
 
     used_labels = set()
     for labels in label_assignments.values():
         used_labels.update(labels)
 
-    num_total_labels = len(used_labels)
-
     with open(LABEL_ASSIGN_PATH, "w") as f:
         json.dump({
             "label_assignments": {str(k): v for k, v in label_assignments.items()},
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
-            "num_total_labels": num_total_labels,
+            "num_total_labels": len(used_labels),
         }, f, indent=2)
 
-    print("=== Client Label Assignments ===")
+    print("=== Dirichlet-based Client Label Assignments ===")
     for cid in range(num_clients):
         print(f"Client {cid}: Labels {sorted(label_assignments[cid])}")
 
     return label_assignments, label_to_clients
+
 
 def prepare_label_indices():
     """
