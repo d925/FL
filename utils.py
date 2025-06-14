@@ -19,33 +19,30 @@ PROCESSED_DATA_DIR = "./processed_dataset"
 
 def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = 5.0):
     if os.path.exists(PROCESSED_DATA_DIR):
-        # クライアントごとのフォルダが最低1つでもあればスキップ
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
             print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
             return
-    
+
     dataset = ImageFolder(root=DATA_DIR)
     class_to_idx = dataset.class_to_idx
     num_classes = len(class_to_idx)
 
-    # クラスごとのサンプルインデックス収集
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
         label_to_indices[label].append(idx)
 
-    # クライアントごとのサンプル保持領域
     client_indices = defaultdict(list)
     client_labels = defaultdict(set)
+    client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
-    # Dirichlet に基づくラベルごとのクライアント分配
     for label in range(num_classes):
         indices = label_to_indices[label]
         np.random.shuffle(indices)
 
         proportions = np.random.dirichlet([alpha] * num_clients)
         proportions = (proportions * len(indices)).astype(int)
-        # 足りない分は最大のところに足す
+
         while proportions.sum() < len(indices):
             proportions[np.argmax(proportions)] += 1
 
@@ -56,20 +53,22 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             subset = indices[start:start + count]
             client_indices[client_id].extend(subset)
             client_labels[client_id].add(label)
+            client_indices_per_label[client_id][label].extend(subset)
             start += count
 
-    # ディレクトリに画像を保存
     transform = transforms.Resize((64, 64))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
             os.makedirs(save_base, exist_ok=True)
 
-        indices = client_indices[client_id]
-        np.random.shuffle(indices)
-        split = int(0.8 * len(indices))
-        train_indices = indices[:split]
-        test_indices = indices[split:]
+        train_indices, test_indices = [], []
+
+        for label, indices in client_indices_per_label[client_id].items():
+            np.random.shuffle(indices)
+            split = int(0.8 * len(indices))
+            train_indices.extend(indices[:split])
+            test_indices.extend(indices[split:])
 
         def save_images(subset, base_dir):
             for idx in subset:
