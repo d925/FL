@@ -1,5 +1,3 @@
-import multiprocessing
-multiprocessing.set_start_method('spawn', force=True)
 import sys
 import json
 import flwr as fl
@@ -109,8 +107,8 @@ if __name__ == "__main__":
         model(torch.randn(1, 3, 256, 256).to(device))
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, num_workers=4, pin_memory=True)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=4)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=32)
 
     fl.client.start_numpy_client(
         server_address="localhost:8080",
