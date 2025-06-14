@@ -83,13 +83,22 @@ class FLClient(fl.client.NumPyClient):
 
 if __name__ == "__main__":
     client_id = int(sys.argv[1])
-    gpu_id = int(sys.argv[2])  # ← main.py から渡される実GPU番号
-    torch.cuda.set_device(gpu_id)
+    
+    # --- ここからGPU初期化追加 ---
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if visible_devices:
+        devices = visible_devices.strip().split(",")
+        assigned_gpu = int(devices[0])  # 先頭のGPUを使う想定
+    else:
+        assigned_gpu = 0
+
+    torch.cuda.set_device(assigned_gpu)
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        # この設定は微妙だが付けるならもう少し緩くてよい（0.05は小さすぎ）
-        torch.cuda.set_per_process_memory_fraction(0.3, device=gpu_id)
+        torch.cuda.set_per_process_memory_fraction(0.5, device=assigned_gpu)
+
+    # --- ここまでGPU初期化追加 ---
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = PMACNN(num_classes=num_labels).to(device)
@@ -98,8 +107,8 @@ if __name__ == "__main__":
         model(torch.randn(1, 3, 256, 256).to(device))
 
     trainset, testset = get_partitioned_data(client_id, num_clients)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, num_workers=0)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=8)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=0)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=16)
 
     fl.client.start_numpy_client(
         server_address="localhost:8080",
