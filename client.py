@@ -39,7 +39,7 @@ class FLClient(fl.client.NumPyClient):
         global_params = [p.clone().detach() for p in self.model.parameters()]
 
         self.model.train()
-        mu = config.get("proximal_mu", 0.1)
+        mu = config.get("proximal_mu", 0)
 
         for _ in range(5):
             for data, target in self.trainloader:
