@@ -12,6 +12,7 @@ LABEL_ASSIGN_PATH = "label_assignments.json"
 
 class FLClient(fl.client.NumPyClient):
     def __init__(self, model, trainloader, testloader, client_id=0, device="cpu"):
+        print("接続完了")
         self.model = model.to(device)
         self.trainloader = trainloader
         self.testloader = testloader
