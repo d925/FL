@@ -7,7 +7,7 @@ import random
 import os
 import json
 from typing import Tuple, Dict
-from config import num_labels, is_iid
+from config import num_labels, is_iid, alpha
 from PIL import Image
 import numpy as np  # 追加
 
@@ -17,7 +17,7 @@ DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
 PROCESSED_DATA_DIR = "./processed_dataset"
 
 
-def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = 0.1):
+def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
     if os.path.exists(PROCESSED_DATA_DIR):
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
