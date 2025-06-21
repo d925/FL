@@ -7,8 +7,6 @@ import os
 
 # 環境変数でクラスタIDやクライアント数を指定（なければデフォルト）
 cluster_id = int(os.environ.get("CLUSTER_ID", 0))
-num_clients = int(os.environ.get("NUM_CLUSTER_CLIENTS", 5))
-num_rounds = int(os.environ.get("NUM_ROUNDS", 10))
 
 # 結果保存用ディレクトリとファイルパス
 RESULTS_DIR = "results"
