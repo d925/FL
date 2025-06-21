@@ -1,6 +1,8 @@
 from torchvision.models import resnet18
 import torch.nn as nn
 from sklearn.cluster import KMeans
+import torch
+from utils import get_partitioned_data
 
 def extract_features(client_id, model, device):
     dataset, _ = get_partitioned_data(client_id, num_clients=15)
