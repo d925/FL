@@ -5,8 +5,6 @@ from config import num_rounds, num_clients
 import json
 import os
 
-# 環境変数でクラスタIDやクライアント数を指定（なければデフォルト）
-cluster_id = int(os.environ.get("CLUSTER_ID", 0))
 
 # 結果保存用ディレクトリとファイルパス
 RESULTS_DIR = "results"
