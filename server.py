@@ -5,7 +5,13 @@ from config import num_rounds,num_clients
 import json
 import os
 
-RESULTS_PATH = "round_metrics.json"
+cluster_id = int(os.environ.get("CLUSTER_ID", 0))
+num_clients = int(os.environ.get("NUM_CLUSTER_CLIENTS", 5))
+num_rounds = int(os.environ.get("NUM_ROUNDS", 10))  # configから読み込んでもOK
+
+# 結果ファイル名をクラスタ別に
+RESULTS_PATH = f"round_metrics_cluster{cluster_id}.json"
+
 current_round = 0
 
 def save_metrics_to_json(round_number, accuracy, loss):
