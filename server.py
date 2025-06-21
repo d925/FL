@@ -47,6 +47,8 @@ strategy = fl.server.strategy.FedProx(
     fraction_evaluate=1.0,
     evaluate_metrics_aggregation_fn=aggregate_metrics,
     proximal_mu=0,
+    min_fit_clients=1,
+    min_available_clients=1,
 )
 
 if __name__ == "__main__":
