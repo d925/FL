@@ -38,4 +38,7 @@ def cluster_clients(num_clients, num_clusters, feature_extractor=None):
     kmeans = KMeans(n_clusters=num_clusters, random_state=42)
     cluster_ids = kmeans.fit_predict(client_features)
 
+    print("クラスタリング結果:")
+    for client_id, cluster_id in clustering_result.items():
+        print(f"クライアント {client_id} は クラスター {cluster_id}")
     return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
