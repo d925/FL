@@ -28,7 +28,7 @@ for cluster_id in range(num_clusters):
         "TOTAL_NUM_CLIENTS": str(num_clients)
     })
     server_proc = subprocess.Popen(["python", "server.py"], env=server_env)
-    time.sleep(5)  # サーバー起動待機（必要に応じて調整）
+    time.sleep(10)  # サーバー起動待機（必要に応じて調整）
 
     # クライアントプロセス群を起動
     client_procs = []
