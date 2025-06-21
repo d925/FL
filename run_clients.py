@@ -12,6 +12,9 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 # Step 2: クラスタリングの実行
 client_cluster_map = cluster_clients(num_clients=num_clients, num_clusters=num_clusters)
 
+print("クラスタリング結果:")
+for client_id, cluster_id in client_cluster_map.items():
+    print(f"クライアント {client_id} は クラスター {cluster_id}")
 # Step 3: 各クラスタごとにフェデレーテッドラーニングを実行
 for cluster_id in range(num_clusters):
     cluster_clients_list = [cid for cid, c in client_cluster_map.items() if c == cluster_id]
