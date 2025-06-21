@@ -1,44 +1,62 @@
-import subprocess
-import torch
+# server.py
+import flwr as fl
+from flwr.server import ServerConfig
+from config import num_rounds, num_clients
+import json
 import os
-import time
-from config import num_clients, num_clusters
-from utils import generate_and_save_dirichlet_partitioned_data
-from cluster import cluster_clients
 
-# Step 1: パーティション作成
-generate_and_save_dirichlet_partitioned_data(num_clients)
+# 環境変数でクラスタIDやクライアント数を指定（なければデフォルト）
+cluster_id = int(os.environ.get("CLUSTER_ID", 0))
 
-# Step 2: クラスタリング
-client_cluster_map = cluster_clients(num_clients=num_clients, num_clusters=num_clusters)
+# 結果保存用ディレクトリとファイルパス
+RESULTS_DIR = "results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
+RESULTS_FILE = os.path.join(RESULTS_DIR, f"round_metrics_cluster{cluster_id}.json")
 
-# Step 3: 各クラスタごとにFL実行
-for cluster_id in range(num_clusters):
-    print(f"\n=== Starting Federated Learning for Cluster {cluster_id} ===\n")
+current_round = 0
 
-    # 対象クライアントを抽出
-    client_ids = [cid for cid, c in client_cluster_map.items() if c == cluster_id]
-    num_cluster_clients = len(client_ids)
+def save_metrics_to_json(round_number, accuracy, loss):
+    data = {}
+    if os.path.exists(RESULTS_FILE):
+        try:
+            with open(RESULTS_FILE, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            print("Error reading metrics file:", e)
+    data[f"round_{round_number:02d}"] = {"accuracy": accuracy, "loss": loss}
+    with open(RESULTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-    # server.py を subprocess で起動
-    server_env = dict(os.environ, 
-                      CLUSTER_ID=str(cluster_id), 
-                      NUM_CLUSTER_CLIENTS=str(num_cluster_clients),
-                      TOTAL_NUM_CLIENTS=str(num_clients))
-    server_proc = subprocess.Popen(["python", "server.py"], env=server_env)
-    time.sleep(5)  # サーバー起動待機
+def aggregate_metrics(results):
+    global current_round
+    print(f"[Server] Raw results from clients:\n{results}\n")
 
-    # 各クライアントを起動
-    client_procs = []
-    for client_id in client_ids:
-        gpu_id = client_id % torch.cuda.device_count()
-        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu_id))
-        proc = subprocess.Popen(["python", "client.py", str(client_id)], env=env)
-        client_procs.append(proc)
+    total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
+    total_examples = total_examples if total_examples > 0 else 1
+    accuracies = [metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0]
+    losses = [metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0]
 
-    # クライアント完了を待機
-    for proc in client_procs:
-        proc.wait()
+    avg_accuracy = sum(accuracies) / total_examples
+    avg_loss = sum(losses) / total_examples
+    current_round += 1
 
-    # サーバー終了待機
-    server_proc.wait()
+    print(f"\n[Server] Round summary → Accuracy: {avg_accuracy:.4f}, Loss: {avg_loss:.4f}\n")
+    save_metrics_to_json(current_round, avg_accuracy, avg_loss)
+    return {"accuracy": avg_accuracy, "loss": avg_loss}
+
+# FedProx 戦略の設定
+strategy = fl.server.strategy.FedProx(
+    fraction_fit=1.0,
+    fraction_evaluate=1.0,
+    evaluate_metrics_aggregation_fn=aggregate_metrics,
+    min_fit_clients=int(num_clients / 2),
+    min_available_clients=num_clients,
+    proximal_mu=0,
+)
+
+if __name__ == "__main__":
+    fl.server.start_server(
+        server_address="localhost:8080",
+        config=ServerConfig(num_rounds=num_rounds),
+        strategy=strategy,
+    )
