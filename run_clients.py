@@ -20,7 +20,7 @@ for cluster_id in range(num_clusters):
     cluster_clients_list = [cid for cid, c in client_cluster_map.items() if c == cluster_id]
 
     print(f"--- クラスタ {cluster_id} のサーバー起動 ---")
-    server_proc = subprocess.Popen(["python", "server.py", str(cluster_id)])
+    server_proc = subprocess.Popen(["python", "server.py"])
     time.sleep(5)  # サーバー起動を待機
 
     client_procs = []
