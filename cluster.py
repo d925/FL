@@ -3,7 +3,7 @@ import torch.nn as nn
 from sklearn.cluster import KMeans
 import torch
 from torch.utils.data import DataLoader
-
+import numpy as np
 from utils import get_partitioned_data
 
 def extract_features(client_id, model, device):
