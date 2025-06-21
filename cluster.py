@@ -5,9 +5,10 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from utils import get_partitioned_data
+from config import num_clients
 
 def extract_features(client_id, model, device):
-    dataset, _ = get_partitioned_data(client_id, num_clients=15)
+    dataset, _ = get_partitioned_data(client_id, num_clients)
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
     
     features = []
