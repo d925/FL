@@ -21,7 +21,7 @@ for cluster_id in range(num_clusters):
 
     print(f"--- クラスタ {cluster_id} のサーバー起動 ---")
     server_proc = subprocess.Popen(["python", "server.py"])
-    time.sleep(5)  # サーバー起動を待機
+    time.sleep(10)  # サーバー起動を待機
 
     client_procs = []
     for client_id in cluster_clients_list:
