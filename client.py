@@ -34,6 +34,7 @@ class FLClient(fl.client.NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
+        print("学習開始")
         self.set_parameters(parameters)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01) 
         global_params = [p.clone().detach() for p in self.model.parameters()]
@@ -113,7 +114,7 @@ if __name__ == "__main__":
     trainset, testset = get_partitioned_data(client_id, num_clients)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
     testloader = torch.utils.data.DataLoader(testset, batch_size=32)
-
+    print("クライアント開始")
     fl.client.start_numpy_client(
         server_address="localhost:8080",
         client=FLClient(model, trainloader, testloader, client_id=client_id, device=device)
