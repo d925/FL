@@ -33,7 +33,7 @@ for cluster_id in range(num_clusters):
     for client_id in client_ids:
         gpu_id = client_id % torch.cuda.device_count()
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu_id), CLIENT_ID=str(client_id))
-        proc = subprocess.Popen(["python", "client.py"], env=env)
+        proc = subprocess.Popen(["python", "client.py", str(client_id)], env=env)
         client_procs.append(proc)
 
     # クライアント完了を待機
