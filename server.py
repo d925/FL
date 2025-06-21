@@ -4,8 +4,12 @@ from flwr.server import ServerConfig
 from config import num_rounds,num_clients
 import json
 import os
+import sys
 
-RESULTS_PATH = "round_metrics.json"
+cluster_id = int(sys.argv[1])
+RESULTS_DIR = f"results/cluster_{cluster_id}"
+os.makedirs(RESULTS_DIR, exist_ok=True)
+RESULTS_PATH = os.path.join(RESULTS_DIR, "round_metrics.json")
 current_round = 0
 
 def save_metrics_to_json(round_number, accuracy, loss):
