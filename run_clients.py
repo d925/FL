@@ -11,7 +11,7 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 
 # サーバープロセスを起動
 server_proc = subprocess.Popen(["python", "server.py"])
-time.sleep(5)  # サーバー起動を待機
+time.sleep(10)  # サーバー起動を待機
 
 # クライアントプロセスを起動
 client_procs = []
