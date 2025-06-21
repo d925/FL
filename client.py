@@ -41,7 +41,7 @@ class FLClient(fl.client.NumPyClient):
         self.model.train()
         mu = config.get("proximal_mu", 0)
 
-        for _ in range(5):
+        for _ in range(1):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()

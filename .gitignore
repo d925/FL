@@ -1,4 +1,3 @@
-label_indices.json
-label_assignments.json
+*.json
 __pycache__/
 *.pyc
