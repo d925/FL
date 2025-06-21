@@ -1,6 +1,6 @@
-num_clients = 15
+num_clients = 10
 num_classes_per_client = 38
-num_rounds = 100
+num_rounds = 10
 num_labels = 38
 num_clusters = 5
 is_iid = False
