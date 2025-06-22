@@ -49,6 +49,7 @@ strategy = fl.server.strategy.FedProx(
     proximal_mu=0,
     min_fit_clients=1,
     min_available_clients=1,
+    min_evaluate_clients=1,
 )
 
 if __name__ == "__main__":
