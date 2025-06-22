@@ -45,6 +45,7 @@ for cluster_id in range(num_clusters):
     server_proc.wait()
 
     # 各クラスタの最終精度を読み取る
+
     metrics_path = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}", "round_metrics.json")
     if os.path.exists(metrics_path):
         with open(metrics_path, "r") as f:
@@ -53,16 +54,17 @@ for cluster_id in range(num_clusters):
                 last_key = sorted(round_data.keys(), key=lambda x: int(x.split("_")[1]))[-1]
                 acc = round_data[last_key]["accuracy"]
                 loss = round_data[last_key]["loss"]
-                cluster_sample_count = len(cluster_clients_list) * 1000  # 仮の総サンプル数
-                correct = acc * cluster_sample_count
+                total_examples = round_data[last_key]["total_examples"]  # ← ここで正確なサンプル数を取得
+                correct = acc * total_examples
                 total_correct += correct
-                total_samples += cluster_sample_count
+                total_samples += total_examples
                 final_cluster_metrics[f"cluster_{cluster_id}"] = {
                     "final_accuracy": acc,
                     "final_loss": loss,
-                    "samples": cluster_sample_count,
+                    "samples": total_examples,
                     "correct": correct
                 }
+
 
 # 全体精度の集計と保存
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
