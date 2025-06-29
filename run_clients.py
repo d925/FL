@@ -39,11 +39,10 @@ class FLClient(NumPyClient):
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
-        # ダミーバッチでforward呼び出し → パラメータ初期化
         self.model.train()
         with torch.no_grad():
-            dummy_input = torch.randn(1, 1, 28, 28).to(self.device)  # 例：MNISTなら28x28x1の画像
-            self.model(dummy_input)
+            dummy_input = torch.randn(1, 3, 28, 28).to(self.device)  # 3チャネルに合わせる
+            self.model(dummy_input)  # ここでconv1, LazyLinearのパラメータが初期化される
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
