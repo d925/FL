@@ -41,8 +41,9 @@ class FLClient(NumPyClient):
 
         self.model.train()
         with torch.no_grad():
-            dummy_input = torch.randn(1, 3, 28, 28).to(self.device)  # 3チャネルに合わせる
-            self.model(dummy_input)  # ここでconv1, LazyLinearのパラメータが初期化される
+            dummy_input = torch.randn(1, 3, 64, 64).to(self.device)  # 64x64 3チャネルに合わせる
+            self.model(dummy_input)  # conv1, LazyLinearのパラメータ初期化
+
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
