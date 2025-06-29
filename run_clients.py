@@ -124,6 +124,11 @@ for cluster_id in range(num_clusters):
     )
 
     def client_fn(context):
+        print("Context attributes:", dir(context))
+        # もしくは
+        print("Context vars:", vars(context))
+        # そのあとに実際の処理
+        # ↓ cidの取得は後回しに
         cid = int(context.cid if hasattr(context, "cid") else context.client_id)
         return FLClient(cid, selected_cids).to_client()
 
