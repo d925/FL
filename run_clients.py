@@ -41,7 +41,7 @@ class FLClient(NumPyClient):
 
         self.model.train()
         with torch.no_grad():
-            dummy_input = torch.randn(1, 3, 64, 64).to(self.device)  # 64x64 3チャネルに合わせる
+            dummy_input = torch.randn(1, 3, 128, 128).to(self.device)  # 64x64 3チャネルに合わせる
             self.model(dummy_input)  # conv1, LazyLinearのパラメータ初期化
 
 
