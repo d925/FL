@@ -124,7 +124,7 @@ for cluster_id in range(num_clusters):
     )
 
     def client_fn(context):
-        cid = int(context.properties["cid"])
+        cid = int(context.cid)  # ここがポイント
         return FLClient(cid, selected_cids).to_client()
 
     history = fl.simulation.start_simulation(
