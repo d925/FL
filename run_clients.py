@@ -126,10 +126,12 @@ def aggregate_metrics(results, cluster_results):
     return {"accuracy": avg_accuracy, "loss": avg_loss}
 
 # クライアント関数生成（クラスタ内でのID割り当てを担う）
+from flwr.common import Context  # ✨ New API
+
 def make_client_fn(selected_cids):
-    def client_fn(cid: str):
-        idx = int(cid)  # Flowerの連番cid
-        real_cid = selected_cids[idx]  # クラスタリングで得た本物のクライアントID
+    def client_fn(context: Context):  # ✅ Flower新方式
+        idx = int(context.client_resources["flwr_client_id"])
+        real_cid = selected_cids[idx]
         return FLClient(real_cid, selected_cids).to_client()
     return client_fn
 
