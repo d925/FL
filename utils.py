@@ -56,15 +56,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             client_indices_per_label[client_id][label].extend(subset)
             start += count
 
-    transform = transforms.Compose([
-        transforms.Resize((128, 128)),                     # 画像サイズ統一
-        transforms.ToTensor(),                             # PIL画像 → Tensor化（0〜1に正規化）
-        transforms.Normalize(                              # 標準正規化
-            mean=[0.485, 0.456, 0.406],                    # ImageNetの平均（R,G,B）
-            std=[0.229, 0.224, 0.225],                     # ImageNetの標準偏差
-        ),
-    ])
-
+    transform = transforms.Resize((128, 128))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
