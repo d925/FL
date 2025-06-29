@@ -139,14 +139,15 @@ for cluster_id in range(num_clusters):
         evaluate_metrics_aggregation_fn=lambda results: aggregate_metrics(results, cluster_results),
     )
 
+    # client_idsを削除
     history = fl.simulation.start_simulation(
         client_fn=make_client_fn(selected_cids),
         num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
         client_resources={"num_cpus": 1, "num_gpus": 1.0},
-        client_ids=[str(cid) for cid in selected_cids],
     )
+
 
     acc = cluster_results.get("accuracy", 0.0)
     loss = cluster_results.get("loss", 0.0)
