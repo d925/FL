@@ -4,6 +4,7 @@ from config import num_clients, num_clusters, num_rounds
 from utils import generate_and_save_dirichlet_partitioned_data
 from cluster import cluster_clients
 import flwr as fl
+from flwr.server import ServerConfig
 
 RESULTS_BASE_DIR = "results"
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
