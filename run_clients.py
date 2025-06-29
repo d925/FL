@@ -91,6 +91,7 @@ class FLClient(NumPyClient):
                 correct += pred.eq(target.view_as(pred)).sum().item()
         avg_loss = total_loss / len(self.testloader.dataset)
         acc = correct / len(self.testloader.dataset)
+        print(f"[Client {self.cid}] Evaluation → Accuracy: {acc*100:.2f}%, Loss: {avg_loss:.4f}, Samples: {len(self.testloader.dataset)}")
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
 # Step 3: クラスタごとのFL実行ループ
