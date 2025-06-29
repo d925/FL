@@ -132,7 +132,7 @@ for cluster_id in range(num_clusters):
 
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
-        num_clients=num_clients,
+        num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
         client_resources={"num_cpus": 1, "num_gpus": 1.0},
