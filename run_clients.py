@@ -97,21 +97,31 @@ class FLClient(NumPyClient):
                 correct += pred.eq(target.view_as(pred)).sum().item()
         avg_loss = total_loss / len(self.testloader.dataset)
         acc = correct / len(self.testloader.dataset)
-        print(f"[Client {self.cid}]: Loss={avg_loss:.4f}, Acc={acc*100:.2f}%")
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
 # 集約関数
 def aggregate_metrics(results, cluster_results):
+    # 各クライアントの評価ログ出力（ここがラウンドごとに呼ばれる）
+    print("\n📊 このラウンドのクライアント評価結果:")
+    for i, (num_examples, metrics) in enumerate(results):
+        acc = metrics["accuracy"] * 100
+        loss = metrics["loss"]
+        print(f"  Client {i}: Acc={acc:.2f}%, Loss={loss:.4f}")
+
+    # 通常の重み付き平均計算
     total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
     total_examples = total_examples if total_examples > 0 else 1
     weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
     weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
     avg_accuracy = weighted_accuracy / total_examples
     avg_loss = weighted_loss / total_examples
+
+    # 結果を cluster_results にも保存（ラウンド終了後に参照される）
     cluster_results["accuracy"] = avg_accuracy
     cluster_results["loss"] = avg_loss
     cluster_results["samples"] = total_examples
     cluster_results["correct"] = avg_accuracy * total_examples
+
     return {"accuracy": avg_accuracy, "loss": avg_loss}
 
 # クライアント関数生成（クラスタ内でのID割り当てを担う）
