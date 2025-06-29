@@ -101,18 +101,26 @@ for cluster_id in range(num_clusters):
 
     cluster_results = {}
 
-    def aggregate_metrics(results):
-        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
-        total_examples = total_examples if total_examples > 0 else 1
-        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        avg_accuracy = weighted_accuracy / total_examples
-        avg_loss = weighted_loss / total_examples
-        cluster_results["accuracy"] = avg_accuracy
-        cluster_results["loss"] = avg_loss
-        cluster_results["samples"] = total_examples
-        cluster_results["correct"] = avg_accuracy * total_examples
-        return {"accuracy": avg_accuracy, "loss": avg_loss}
+def aggregate_metrics(results):
+    print("\n📊 このラウンドのクライアント評価結果:")
+    for i, (num_examples, metrics) in enumerate(results):
+        acc = metrics["accuracy"] * 100
+        loss = metrics["loss"]
+        print(f"  Client {i}: Accuracy = {acc:.2f}%, Loss = {loss:.4f}, Samples = {num_examples}")
+
+    total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
+    total_examples = total_examples if total_examples > 0 else 1
+    weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
+    weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
+    avg_accuracy = weighted_accuracy / total_examples
+    avg_loss = weighted_loss / total_examples
+
+    cluster_results["accuracy"] = avg_accuracy
+    cluster_results["loss"] = avg_loss
+    cluster_results["samples"] = total_examples
+    cluster_results["correct"] = avg_accuracy * total_examples
+
+    return {"accuracy": avg_accuracy, "loss": avg_loss}
 
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
