@@ -11,11 +11,11 @@ import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
 
-# 結果保存ディレクトリ
+# 結果保存ディレクトリ作成
 RESULTS_BASE_DIR = "results"
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
-# Step 1: Dirichlet 分割生成
+# Step 1: Dirichlet分割生成
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
 # Step 2: クラスタリング実行
@@ -25,12 +25,12 @@ print("クラスタリング結果:")
 for cid, clust_id in client_cluster_map.items():
     print(f"クライアント {cid} は クラスター {clust_id}")
 
-# クラスタ単位で結果保持
+# クラスタ単位の最終結果保持用
 final_cluster_metrics = {}
 total_correct = 0
 total_samples = 0
 
-# クライアント定義
+# クライアントクラス定義
 class FLClient(NumPyClient):
     def __init__(self, cid, active_cids):
         self.cid = int(cid)
@@ -98,7 +98,6 @@ for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
-    # 集計関数
     cluster_results = {}
 
     def aggregate_metrics(results):
@@ -114,7 +113,6 @@ for cluster_id in range(num_clusters):
         cluster_results["correct"] = avg_accuracy * total_examples
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
-    # strategy
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
@@ -125,12 +123,10 @@ for cluster_id in range(num_clusters):
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
 
-    # client_fn
     def client_fn(context):
         cid = int(context.properties["cid"])
         return FLClient(cid, selected_cids).to_client()
 
-    # simulation 実行
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
         num_clients=num_clients,
@@ -154,7 +150,7 @@ for cluster_id in range(num_clusters):
     total_correct += correct
     total_samples += examples
 
-# 最終集計
+# 最終集計・保存
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
 final_cluster_metrics["overall"] = {
     "accuracy": overall_accuracy,
