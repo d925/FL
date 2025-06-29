@@ -4,13 +4,13 @@ from torch.nn.utils import parameters_to_vector
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_distances
 from sklearn.cluster import SpectralClustering
-from model import CNN
+from model import ResNetFL
 from config import num_clients, num_clusters
 from utils import get_partitioned_data
 
 def extract_layerwise_weights(cid, device, input_size=(3, 128, 128), batches=3):
     """クライアントのローカルモデルをforward＆仮学習後、flattenしたパラメータを取得"""
-    model = CNN().to(device)
+    model = ResNetFL().to(device)
     dummy_input = torch.randn(1, *input_size).to(device)
     with torch.no_grad():
         model(dummy_input)  # Lazyレイヤ初期化
