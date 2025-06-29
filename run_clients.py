@@ -138,6 +138,7 @@ def make_client_fn(selected_cids):
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"--- クラスタ {cluster_id} のシミュレーション開始 ---")
+    print(f"クラスタ {cluster_id} に含まれるクライアントID: {selected_cids}")
 
     cluster_results = {}
     
