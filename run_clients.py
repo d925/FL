@@ -135,8 +135,8 @@ def make_client_fn(selected_cids):
 
 
 # Step 3: クラスタごとのFL実行ループ
-for cluster_id in range(num_clusters):
-    selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
+for cluster_id in range(1):
+    selected_cids = [cid for cid, clid in client_cluster_map.items() ]
     print(f"--- クラスタ {cluster_id} のシミュレーション開始 ---")
     print(f"クラスタ {cluster_id} に含まれるクライアントID: {selected_cids}")
 
