@@ -127,18 +127,20 @@ def aggregate_metrics(results, cluster_results):
 # クライアント関数生成（クラスタ内でのID割り当てを担う）
 def make_client_fn(selected_cids):
     def client_fn(cid: str):
-        cid_int = int(cid)  # Flowerはcidをstrで渡すことが多い
-        return FLClient(cid_int, selected_cids).to_client()
+        idx = int(cid)  # Flowerの連番cid
+        real_cid = selected_cids[idx]  # クラスタリングで得た本物のクライアントID
+        return FLClient(real_cid, selected_cids).to_client()
     return client_fn
+
 
 
 # Step 3: クラスタごとのFL実行ループ
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
-    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
+    print(f"--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
-
+    
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
@@ -149,7 +151,6 @@ for cluster_id in range(num_clusters):
         evaluate_metrics_aggregation_fn=lambda results: aggregate_metrics(results, cluster_results),
     )
 
-    # client_idsを削除
     history = fl.simulation.start_simulation(
         client_fn=make_client_fn(selected_cids),
         num_clients=len(selected_cids),
@@ -157,6 +158,7 @@ for cluster_id in range(num_clusters):
         strategy=strategy,
         client_resources={"num_cpus": 16, "num_gpus": 1.0},
     )
+
 
 
     acc = cluster_results.get("accuracy", 0.0)
