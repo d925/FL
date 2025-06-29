@@ -116,13 +116,11 @@ def aggregate_metrics(results, cluster_results):
 
 # クライアント関数生成（クラスタ内でのID割り当てを担う）
 def make_client_fn(selected_cids):
-    counter = {"idx": 0}
-    def client_fn(context):
-        idx = counter["idx"]
-        counter["idx"] += 1
-        cid = selected_cids[idx]
-        return FLClient(cid, selected_cids).to_client()
+    def client_fn(cid: str):
+        cid_int = int(cid)  # Flowerはcidをstrで渡すことが多い
+        return FLClient(cid_int, selected_cids).to_client()
     return client_fn
+
 
 # Step 3: クラスタごとのFL実行ループ
 for cluster_id in range(num_clusters):
@@ -147,6 +145,7 @@ for cluster_id in range(num_clusters):
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
         client_resources={"num_cpus": 1, "num_gpus": 1.0},
+        client_ids=[str(cid) for cid in selected_cids],
     )
 
     acc = cluster_results.get("accuracy", 0.0)
