@@ -97,6 +97,7 @@ class FLClient(NumPyClient):
                 correct += pred.eq(target.view_as(pred)).sum().item()
         avg_loss = total_loss / len(self.testloader.dataset)
         acc = correct / len(self.testloader.dataset)
+        print(f"[Client {self.cid}]: Loss={avg_loss:.4f}, Acc={acc*100:.2f}%")
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
 # 集約関数
