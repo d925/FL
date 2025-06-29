@@ -123,11 +123,11 @@ for cluster_id in range(num_clusters):
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
 
-    def client_fn(context):
-    # Flowerの連番cidは0から始まるクラスタ内のクライアントインデックスなので
-        idx = int(context.properties["cid"])
-        real_cid = selected_cids[idx]  # クラスタ内クライアントの実IDに変換
+    def client_fn(cid: str):
+        idx = int(cid)  # Flowerから渡されるクラスタ内連番cidは文字列
+        real_cid = selected_cids[idx]
         return FLClient(real_cid, selected_cids).to_client()
+
 
 
     history = fl.simulation.start_simulation(
