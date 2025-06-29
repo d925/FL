@@ -124,12 +124,9 @@ for cluster_id in range(num_clusters):
     )
 
     def client_fn(context):
-    # context は辞書のように振る舞うことがあるため
-        cid_str = context.get("cid") or context.get("client_id") or context.get("properties", {}).get("cid")
-        if cid_str is None:
-            raise ValueError("Cannot find client id in context")
-        cid = int(cid_str)
+        cid = int(context.cid if hasattr(context, "cid") else context.client_id)
         return FLClient(cid, selected_cids).to_client()
+
 
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
