@@ -8,7 +8,7 @@ from model import CNN
 from config import num_clients, num_clusters
 from utils import get_partitioned_data
 
-def extract_layerwise_weights(cid, device, input_size=(3, 64, 64), batches=3):
+def extract_layerwise_weights(cid, device, input_size=(3, 128, 128), batches=3):
     """クライアントのローカルモデルをforward＆仮学習後、flattenしたパラメータを取得"""
     model = CNN().to(device)
     dummy_input = torch.randn(1, *input_size).to(device)
