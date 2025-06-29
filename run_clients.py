@@ -93,25 +93,36 @@ class FLClient(NumPyClient):
         acc = correct / len(self.testloader.dataset)
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
+# 集約関数
+def aggregate_metrics(results, cluster_results):
+    total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
+    total_examples = total_examples if total_examples > 0 else 1
+    weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
+    weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
+    avg_accuracy = weighted_accuracy / total_examples
+    avg_loss = weighted_loss / total_examples
+    cluster_results["accuracy"] = avg_accuracy
+    cluster_results["loss"] = avg_loss
+    cluster_results["samples"] = total_examples
+    cluster_results["correct"] = avg_accuracy * total_examples
+    return {"accuracy": avg_accuracy, "loss": avg_loss}
+
+# クライアント関数生成（クラスタ内でのID割り当てを担う）
+def make_client_fn(selected_cids):
+    counter = {"idx": 0}
+    def client_fn(context):
+        idx = counter["idx"]
+        counter["idx"] += 1
+        cid = selected_cids[idx]
+        return FLClient(cid, selected_cids).to_client()
+    return client_fn
+
 # Step 3: クラスタごとのFL実行ループ
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
-
-    def aggregate_metrics(results):
-        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
-        total_examples = total_examples if total_examples > 0 else 1
-        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        avg_accuracy = weighted_accuracy / total_examples
-        avg_loss = weighted_loss / total_examples
-        cluster_results["accuracy"] = avg_accuracy
-        cluster_results["loss"] = avg_loss
-        cluster_results["samples"] = total_examples
-        cluster_results["correct"] = avg_accuracy * total_examples
-        return {"accuracy": avg_accuracy, "loss": avg_loss}
 
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
@@ -120,22 +131,12 @@ for cluster_id in range(num_clusters):
         min_available_clients=len(selected_cids),
         min_evaluate_clients=len(selected_cids),
         proximal_mu=0.0,
-        evaluate_metrics_aggregation_fn=aggregate_metrics,
+        evaluate_metrics_aggregation_fn=lambda results: aggregate_metrics(results, cluster_results),
     )
 
-    def client_fn(context):
-        print("Context attributes:", dir(context))
-        # もしくは
-        print("Context vars:", vars(context))
-        # そのあとに実際の処理
-        # ↓ cidの取得は後回しに
-        cid = int(context.cid if hasattr(context, "cid") else context.client_id)
-        return FLClient(cid, selected_cids).to_client()
-
-
     history = fl.simulation.start_simulation(
-        client_fn=client_fn,
-        num_clients=num_clients,
+        client_fn=make_client_fn(selected_cids),
+        num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
         client_resources={"num_cpus": 1, "num_gpus": 0.0},
