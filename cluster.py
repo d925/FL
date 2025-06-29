@@ -1,6 +1,7 @@
 from torchvision.models import resnet18
 import torch.nn as nn
-from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.mixture import GaussianMixture
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -18,10 +19,9 @@ def extract_features(client_id, model, device):
             x = x.to(device)
             feat = model(x)
             features.append(feat.cpu().numpy())
-    return np.concatenate(features, axis=0).mean(axis=0)
+    return np.concatenate(features, axis=0)
 
-
-def cluster_clients(num_clients, num_clusters, feature_extractor=None):
+def cluster_clients(num_clients, num_clusters, feature_extractor=None, pca_components=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if feature_extractor is None:
         model = resnet18(pretrained=True)
@@ -30,12 +30,22 @@ def cluster_clients(num_clients, num_clusters, feature_extractor=None):
         model = feature_extractor
     model.to(device)
 
-    client_features = []
+    all_features = []
     for cid in range(num_clients):
         feat = extract_features(cid, model, device)
-        client_features.append(feat)
+        # clientごとに特徴の平均だけでなく、全特徴をまとめて使うために後でPCAを使う
+        all_features.append(feat)
 
-    kmeans = KMeans(n_clusters=num_clusters, random_state=42)
-    cluster_ids = kmeans.fit_predict(client_features)
+    # クライアント単位の特徴ベクトル（平均）を作る
+    client_features = [np.mean(feat, axis=0) for feat in all_features]
+    client_features = np.stack(client_features)
+
+    # PCAで次元削減（高次元空間だとクラスタリングが辛いので）
+    pca = PCA(n_components=pca_components, random_state=42)
+    reduced_features = pca.fit_transform(client_features)
+
+    # GMMクラスタリング（KMeansより柔軟に分布を捉えられる）
+    gmm = GaussianMixture(n_components=num_clusters, random_state=42)
+    cluster_ids = gmm.fit_predict(reduced_features)
 
     return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
