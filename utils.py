@@ -105,8 +105,10 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 def get_partitioned_data(client_id: int, num_clients: int):
     # 加工済みデータのフォルダ読み込み
     transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),  # 学習時のみのaugmentation
+        transforms.Resize((128, 128)),
         transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],  # mean
+                            [0.229, 0.224, 0.225])  # std
     ])
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
