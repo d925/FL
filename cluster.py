@@ -1,51 +1,61 @@
-from torchvision.models import resnet18
-import torch.nn as nn
-from sklearn.decomposition import PCA
-from sklearn.mixture import GaussianMixture
 import torch
-from torch.utils.data import DataLoader
 import numpy as np
+from torch.nn.utils import parameters_to_vector
+from sklearn.metrics.pairwise import cosine_distances
+from sklearn.cluster import SpectralClustering
+from model import CNN  # お前のモデルクラス
+from config import num_clients, num_clusters
 from utils import get_partitioned_data
-from config import num_clients
 
-def extract_features(client_id, model, device):
-    dataset, _ = get_partitioned_data(client_id, num_clients)
-    loader = DataLoader(dataset, batch_size=32, shuffle=False)
-    
-    features = []
-    model.eval()
+def extract_layerwise_weights(cid, device, input_size=(3, 64, 64)):
+    """クライアントのローカルモデルを一度forwardし、パラメータをflattenして取得"""
+    model = CNN().to(device)
+    dummy_input = torch.randn(1, *input_size).to(device)
+
+    # モデル初期化（LazyLinear対応）
     with torch.no_grad():
-        for x, _ in loader:
-            x = x.to(device)
-            feat = model(x)
-            features.append(feat.cpu().numpy())
-    return np.concatenate(features, axis=0)
+        model(dummy_input)
 
-def cluster_clients(num_clients, num_clusters, feature_extractor=None, pca_components=50):
+    # ローカルデータ取得（この時点でtrainせずに構造だけ取る）
+    trainset, _ = get_partitioned_data(cid, num_clients)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32)
+
+    # 仮学習（少しだけやる：LayerCFLは“モデルの初期適応”を見る）
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    model.train()
+    for data, target in trainloader:
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+        break  # ほんの1バッチだけ学習させて層を個別化
+    model.eval()
+
+    # パラメータを1ベクトルにflatten
+    return parameters_to_vector(model.parameters()).detach().cpu().numpy()
+
+def cluster_clients(num_clients, num_clusters):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if feature_extractor is None:
-        model = resnet18(pretrained=True)
-        model.fc = nn.Identity()  # 最終層を除去して特徴抽出器に
-    else:
-        model = feature_extractor
-    model.to(device)
+    weight_vectors = []
 
-    all_features = []
+    print("🔍 各クライアントのローカルモデルから重み抽出中...")
     for cid in range(num_clients):
-        feat = extract_features(cid, model, device)
-        # clientごとに特徴の平均だけでなく、全特徴をまとめて使うために後でPCAを使う
-        all_features.append(feat)
+        w = extract_layerwise_weights(cid, device)
+        weight_vectors.append(w)
 
-    # クライアント単位の特徴ベクトル（平均）を作る
-    client_features = [np.mean(feat, axis=0) for feat in all_features]
-    client_features = np.stack(client_features)
+    print("📐 コサイン距離行列を計算中...")
+    distance_matrix = cosine_distances(weight_vectors)
 
-    # PCAで次元削減（高次元空間だとクラスタリングが辛いので）
-    pca = PCA(n_components=pca_components, random_state=42)
-    reduced_features = pca.fit_transform(client_features)
-
-    # GMMクラスタリング（KMeansより柔軟に分布を捉えられる）
-    gmm = GaussianMixture(n_components=num_clusters, random_state=42)
-    cluster_ids = gmm.fit_predict(reduced_features)
+    print("🔗 スペクトルクラスタリングでクライアントをグルーピング中...")
+    spectral = SpectralClustering(
+        n_clusters=num_clusters,
+        affinity='precomputed',
+        random_state=42
+    )
+    cluster_ids = spectral.fit_predict(distance_matrix)
 
     return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
