@@ -81,27 +81,24 @@ class FLClient(NumPyClient):
                 self.optimizer.step()
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
-import logging
-logger = logging.getLogger(__name__)
-
-def evaluate(self, parameters, config):
-    if not self.testloader:
-        return 0.0, 0, {"accuracy": 0.0, "loss": 0.0}
-    self.set_parameters(parameters)
-    self.model.eval()
-    correct = 0
-    total_loss = 0.0
-    with torch.no_grad():
-        for data, target in self.testloader:
-            data, target = data.to(self.device), target.to(self.device)
-            output = self.model(data)
-            total_loss += self.criterion(output, target).item() * data.size(0)
-            pred = output.argmax(dim=1, keepdim=True)
-            correct += pred.eq(target.view_as(pred)).sum().item()
-    avg_loss = total_loss / len(self.testloader.dataset)
-    acc = correct / len(self.testloader.dataset)
-    logger.info(f"[Client {self.cid}]: Loss={avg_loss:.4f}, Acc={acc*100:.2f}%")
-    return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
+    def evaluate(self, parameters, config):
+        if not self.testloader:
+            return 0.0, 0, {"accuracy": 0.0, "loss": 0.0}
+        self.set_parameters(parameters)
+        self.model.eval()
+        correct = 0
+        total_loss = 0.0
+        with torch.no_grad():
+            for data, target in self.testloader:
+                data, target = data.to(self.device), target.to(self.device)
+                output = self.model(data)
+                total_loss += self.criterion(output, target).item() * data.size(0)
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+        avg_loss = total_loss / len(self.testloader.dataset)
+        acc = correct / len(self.testloader.dataset)
+        print(f"[Client {self.cid}]: Loss={avg_loss:.4f}, Acc={acc*100:.2f}%")
+        return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
 # 集約関数
 def aggregate_metrics(results, cluster_results):
