@@ -25,6 +25,8 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             return
 
     dataset = ImageFolder(root=DATA_DIR)
+    total_samples = len(dataset.samples)
+    print(f"元のデータセット総数: {total_samples}")
     class_to_idx = dataset.class_to_idx
     num_classes = len(class_to_idx)
 
@@ -55,7 +57,9 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
-
+    assigned_total = sum(len(indices) for indices in client_indices.values())
+    print(f"クライアントへの割り当て総数: {assigned_total}")
+    
     transform = transforms.Resize((128, 128))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
