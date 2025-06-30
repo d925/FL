@@ -95,8 +95,8 @@ class FLClient(NumPyClient):
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
 # Step 3: クラスタごとのFL実行ループ
-for cluster_id in range(num_clusters):
-    selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
+for cluster_id in range(1):
+    selected_cids = [cid for cid, clid in client_cluster_map.items() ]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
@@ -119,6 +119,8 @@ for cluster_id in range(num_clusters):
         cluster_results["loss"] = avg_loss
         cluster_results["samples"] = total_examples
         cluster_results["correct"] = avg_accuracy * total_examples
+        
+        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
