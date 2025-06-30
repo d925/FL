@@ -10,6 +10,8 @@ from typing import Tuple, Dict
 from config import num_labels, is_iid, alpha
 from PIL import Image
 import numpy as np  # 追加
+import glob
+
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 LABEL_INDICES_PATH = "label_indices.json"
