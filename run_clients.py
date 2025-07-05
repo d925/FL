@@ -3,7 +3,7 @@ import json
 from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
-from model import MobileNetV3Classifier
+from model import MobileNetClassifier
 import flwr as fl
 from flwr.server import ServerConfig
 import torch
@@ -44,7 +44,7 @@ class FLClient(NumPyClient):
     def __init__(self, cid, active_cids):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = MobileNetV3Classifier(num_classes=num_labels).to(self.device)
+        self.model = MobileNetClassifier(num_classes=num_labels).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
