@@ -1,23 +1,28 @@
-# model.py
 import torch
 import torch.nn as nn
-from torchvision.models import mobilenet_v3_large
+import torch.nn.functional as F
 
-
-class MobileNetV3Classifier(nn.Module):
+class CNN(nn.Module):
     def __init__(self, num_classes: int = 38):
-        super(MobileNetV3Classifier, self).__init__()
-        base_model = mobilenet_v3_large(pretrained=True)  # 事前学習ありにしておくと性能向上
-        self.feature_extractor = base_model.features
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(960, num_classes),
-        )
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.dropout = nn.Dropout(0.25)
+
+        # 入力画像128×128 → conv+pool×2 → 64チャネル × 32×32 = 65536
+        self.fc1 = nn.Linear(64 * 32 * 32, 512)  # ← LazyLinearをやめて固定
+        self.fc2 = nn.Linear(512, num_classes)
+
+    def _forward_conv(self, x):
+        x = self.pool(F.relu(self.conv1(x)))  # (B, 32, 64, 64)
+        x = self.pool(F.relu(self.conv2(x)))  # (B, 64, 32, 32)
+        return x
 
     def forward(self, x):
-        x = self.feature_extractor(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.classifier(x)
+        x = self._forward_conv(x)
+        x = x.view(x.size(0), -1)  # Flatten (B, 65536)
+        x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
         return x
