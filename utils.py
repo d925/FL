@@ -62,7 +62,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
     
-    transform = transforms.Resize((224, 224))
+    transform = transforms.Resize((128, 128))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
