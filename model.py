@@ -12,7 +12,7 @@ class MobileNetV3Classifier(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
             nn.Dropout(0.2),
-            nn.Linear(1280, num_classes),
+            nn.Linear(960, num_classes),
         )
 
     def forward(self, x):
