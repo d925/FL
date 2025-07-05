@@ -148,7 +148,7 @@ for cluster_id in range(num_clusters):
     client_cache = {}
 
     def client_fn(context: Context):
-        cid = context.client_id  # Contextからcidを取得
+        cid = context.cid  # Contextからcidを取得
         idx = int(cid)
         real_cid = selected_cids[idx]
 
