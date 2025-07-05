@@ -134,7 +134,7 @@ for cluster_id in range(num_clusters):
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
     strategy = fl.server.strategy.FedProx(
-        fraction_fit=0.1,
+        fraction_fit=0.5,
         fraction_evaluate=1.0,
         min_fit_clients=max(1, int(0.1 * len(selected_cids))),
         min_available_clients=len(selected_cids),
