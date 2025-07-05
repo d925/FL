@@ -148,7 +148,7 @@ for cluster_id in range(num_clusters):
     client_cache = {}
 
     def client_fn(context: Context):
-        cid = context.cid  # Contextからcidを取得
+        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
         idx = int(cid)
         real_cid = selected_cids[idx]
 
