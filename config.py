@@ -5,4 +5,4 @@ num_labels = 38
 is_iid = False
 num_to_sample=4
 alpha = 100
-is_cluster = False
+is_cluster = True

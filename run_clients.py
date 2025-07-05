@@ -128,10 +128,27 @@ for cluster_id in range(num_clusters):
         cluster_results["loss"] = avg_loss
         cluster_results["samples"] = total_examples
         cluster_results["correct"] = avg_accuracy * total_examples
-        
+
         print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
+        # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
+        output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
+        os.makedirs(output_dir, exist_ok=True)
+        summary_file = os.path.join(output_dir, "round_metrics.jsonl")
+
+        round_summary = {
+            "accuracy": avg_accuracy,
+            "loss": avg_loss,
+            "samples": total_examples,
+            "correct": avg_accuracy * total_examples,
+        }
+
+        with open(summary_file, "a") as f:
+            json.dump(round_summary, f)
+            f.write("\n")  # JSONL形式で追記
+
         return {"accuracy": avg_accuracy, "loss": avg_loss}
+
 
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
