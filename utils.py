@@ -62,7 +62,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
     
-    transform = transforms.Resize((128, 128))
+    transform = transforms.Resize((224, 224))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
@@ -119,15 +119,21 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 
 def get_partitioned_data(client_id: int, num_clients: int):
     # 加工済みデータのフォルダ読み込み
-    transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),  # 学習時のみのaugmentation
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ])
+
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
-
-    train_dataset = ImageFolder(root=train_dir, transform=transform)
-    test_dataset = ImageFolder(root=test_dir, transform=transform)
+    
+    train_dataset = ImageFolder(root=train_dir, transform=train_transform)
+    test_dataset = ImageFolder(root=test_dir, transform=test_transform)
 
     return train_dataset, test_dataset
 
