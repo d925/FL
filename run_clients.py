@@ -149,7 +149,7 @@ for cluster_id in range(num_clusters):
 
     def client_fn(context: Context):
         cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
-        idx = int(cid)
+        idx = int(cid_int)
         real_cid = selected_cids[idx]
 
         if real_cid not in client_cache:
