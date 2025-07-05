@@ -162,7 +162,6 @@ for cluster_id in range(num_clusters):
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
         client_resources={"num_cpus": 1, "num_gpus": 1.0},
-        actor_pool_size=3,
     )
 
     acc = cluster_results.get("accuracy", 0.0)
