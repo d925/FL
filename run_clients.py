@@ -136,17 +136,23 @@ for cluster_id in range(num_clusters):
     strategy = fl.server.strategy.FedProx(
         fraction_fit=0.1,
         fraction_evaluate=1.0,
-        min_fit_clients=len(selected_cids),
+        min_fit_clients=max(1, int(0.1 * len(selected_cids))),
         min_available_clients=len(selected_cids),
         min_evaluate_clients=len(selected_cids),
         proximal_mu=0.0,
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
 
+    client_cache = {}
+
+
     def client_fn(cid: str):
-        idx = int(cid)  # Flowerから渡されるクラスタ内連番cidは文字列
+        idx = int(cid)
         real_cid = selected_cids[idx]
-        return FLClient(real_cid, selected_cids).to_client()
+        if real_cid not in client_cache:
+            client_cache[real_cid] = FLClient(real_cid, selected_cids).to_client()
+        return client_cache[real_cid]
+
 
 
 
