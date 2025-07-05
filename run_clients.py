@@ -141,6 +141,7 @@ for cluster_id in range(num_clusters):
         min_evaluate_clients=len(selected_cids),
         proximal_mu=0.0,
         evaluate_metrics_aggregation_fn=aggregate_metrics,
+        actor_pool_size=3,
     )
 
     client_cache = {}
@@ -161,7 +162,7 @@ for cluster_id in range(num_clusters):
         num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
-        client_resources={"num_cpus": 1, "num_gpus": 0.2},
+        client_resources={"num_cpus": 1, "num_gpus": 1.0},
     )
 
     acc = cluster_results.get("accuracy", 0.0)
