@@ -1,6 +1,6 @@
 import os
 import json
-from config import num_clients, num_clusters, num_rounds, is_cluster
+from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
@@ -19,16 +19,19 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 
 if is_cluster:
     # Step 2: クラスタリング実行
-    client_cluster_map = cluster_clients(num_clients=num_clients, num_clusters=num_clusters)
+    client_cluster_map = cluster_clients(num_clients=num_clients)
 
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
     
-    cluster_list = list(set(client_cluster_map.values()))
+    cluster_list = sorted(set(client_cluster_map.values()))
+    num_clusters = len(cluster_list)  # ★ クラスタ数を自動反映
 else:
     client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
     cluster_list = [0]
+    num_clusters = 1
+
 
 
 # クラスタ単位の最終結果保持用
