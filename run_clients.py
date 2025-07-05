@@ -1,6 +1,6 @@
 import os
 import json
-from config import num_clients, num_clusters, num_rounds
+from config import num_clients, num_clusters, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
@@ -15,15 +15,21 @@ from flwr.client import NumPyClient
 RESULTS_BASE_DIR = "results"
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
-# Step 1: Dirichlet分割生成
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
-# Step 2: クラスタリング実行
-client_cluster_map = cluster_clients(num_clients=num_clients, num_clusters=num_clusters)
+if is_cluster:
+    # Step 2: クラスタリング実行
+    client_cluster_map = cluster_clients(num_clients=num_clients, num_clusters=num_clusters)
 
-print("クラスタリング結果:")
-for cid, clust_id in client_cluster_map.items():
-    print(f"クライアント {cid} は クラスター {clust_id}")
+    print("クラスタリング結果:")
+    for cid, clust_id in client_cluster_map.items():
+        print(f"クライアント {cid} は クラスター {clust_id}")
+    
+    cluster_list = list(set(client_cluster_map.values()))
+else:
+    client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
+    cluster_list = [0]
+
 
 # クラスタ単位の最終結果保持用
 final_cluster_metrics = {}
