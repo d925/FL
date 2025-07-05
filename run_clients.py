@@ -143,17 +143,19 @@ for cluster_id in range(num_clusters):
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
 
+    from flwr.common import Context
+
     client_cache = {}
 
-
-    def client_fn(cid: str):
+    def client_fn(context: Context):
+        cid = context.client_id  # Contextからcidを取得
         idx = int(cid)
         real_cid = selected_cids[idx]
+
         if real_cid not in client_cache:
             client_cache[real_cid] = FLClient(real_cid, selected_cids).to_client()
+
         return client_cache[real_cid]
-
-
 
 
     history = fl.simulation.start_simulation(
