@@ -11,7 +11,7 @@ class CNN(nn.Module):
         self.dropout = nn.Dropout(0.25)
 
         # 入力画像128×128 → conv+pool×2 → 64チャネル × 32×32 = 65536
-        self.fc1 = nn.Linear(64 * 56 * 56, 512)  # ← LazyLinearをやめて固定
+        self.fc1 = nn.Linear(64 * 32 * 32, 512)  # ← LazyLinearをやめて固定
         self.fc2 = nn.Linear(512, num_classes)
 
     def _forward_conv(self, x):
