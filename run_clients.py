@@ -46,7 +46,7 @@ class FLClient(NumPyClient):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ResNet50Classifier(num_classes=num_labels).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.05, momentum=0.9)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
@@ -71,7 +71,7 @@ class FLClient(NumPyClient):
         mu = config.get("proximal_mu", 0.0)
 
         self.model.train()
-        for _ in range(5):
+        for _ in range(1):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
@@ -134,7 +134,7 @@ for cluster_id in range(num_clusters):
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
     strategy = fl.server.strategy.FedProx(
-        fraction_fit=0.5,
+        fraction_fit=1.0,
         fraction_evaluate=1.0,
         min_fit_clients=max(1, int(0.1 * len(selected_cids))),
         min_available_clients=len(selected_cids),
