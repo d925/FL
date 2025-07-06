@@ -4,5 +4,5 @@ num_rounds = 200
 num_labels = 38
 is_iid = False
 num_to_sample=4
-alpha = 100
-is_cluster = True
+alpha = 1.0
+is_cluster = False
