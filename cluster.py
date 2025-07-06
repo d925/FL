@@ -21,31 +21,59 @@ def extract_features(client_id, model, device):
             features.append(feat.cpu().numpy())
     return np.concatenate(features, axis=0).mean(axis=0)  # クライアントごとに平均プール
 
-def determine_optimal_k(features, k_range=(2, 10)):
-    wcss = []  # クラスタ内誤差平方和（Within-Cluster Sum of Squares）
-    silhouettes = []  # シルエット係数
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import numpy as np
+import matplotlib.pyplot as plt
+
+def determine_optimal_k_auto(features, k_range=(2, 15), plot=False):
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(features)
+
+    # 次元削減（PCA）
+    pca = PCA(n_components=min(50, scaled.shape[1]))
+    reduced = pca.fit_transform(scaled)
+
+    silhouettes = []
+    wcss = []
 
     for k in range(k_range[0], k_range[1] + 1):
         kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-        cluster_ids = kmeans.fit_predict(features)
-        wcss.append(kmeans.inertia_)  # inertia_ = WCSS
-        score = silhouette_score(features, cluster_ids)
+        cluster_ids = kmeans.fit_predict(reduced)
+        wcss.append(kmeans.inertia_)
+        score = silhouette_score(reduced, cluster_ids)
         silhouettes.append(score)
 
-    # エルボー法: WCSSの減少が鈍化するポイント（最も差分が小さくなるところ）
-    deltas = np.diff(wcss)
-    elbow_k = np.argmin(np.abs(np.diff(deltas))) + 2  # +2 because index starts from k=2
+    # シルエット最大のkを選択（より信頼性が高い指標）
+    best_k = np.argmax(silhouettes) + k_range[0]
 
+    if plot:
+        plt.figure(figsize=(12,5))
+        plt.subplot(1,2,1)
+        plt.plot(range(k_range[0], k_range[1] + 1), wcss, marker='o')
+        plt.xlabel('Number of clusters k')
+        plt.ylabel('WCSS')
+        plt.title('Elbow Method')
 
-    # 両方の平均値 or どちらか保守的な方を選ぶ
-    optimal_k = elbow_k
-    return optimal_k
+        plt.subplot(1,2,2)
+        plt.plot(range(k_range[0], k_range[1] + 1), silhouettes, marker='o', color='orange')
+        plt.xlabel('Number of clusters k')
+        plt.ylabel('Silhouette Score')
+        plt.title('Silhouette Analysis')
 
-def cluster_clients(num_clients, feature_extractor=None):
+        plt.show()
+
+    print(f"🟢 自動判定された最適クラスタ数 k: {best_k}")
+    return best_k, scaler, pca
+
+def cluster_clients_improved(num_clients, feature_extractor=None, k_range=(2, 15), plot=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     if feature_extractor is None:
         model = resnet18(pretrained=True)
-        model.fc = nn.Identity()  # 全結合層除去
+        model.fc = nn.Identity()
     else:
         model = feature_extractor
     model.to(device)
@@ -56,10 +84,16 @@ def cluster_clients(num_clients, feature_extractor=None):
         client_features.append(feat)
 
     client_features = np.vstack(client_features)
-    optimal_k = determine_optimal_k(client_features)
+
+    # 自動で最適kを判定し、スケーラーとPCAも取得
+    optimal_k, scaler, pca = determine_optimal_k_auto(client_features, k_range, plot)
+
+    # 特徴量の前処理（同じ処理をクラスタリングに使う）
+    scaled = scaler.transform(client_features)
+    reduced = pca.transform(scaled)
 
     kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init='auto')
-    cluster_ids = kmeans.fit_predict(client_features)
+    cluster_ids = kmeans.fit_predict(reduced)
 
     print(f"🔍 決定されたクラスタ数: {optimal_k}")
     return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
