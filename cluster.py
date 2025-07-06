@@ -31,7 +31,7 @@ def extract_features(client_id, model, device):
     return np.concatenate([mean, std])  # 平均＋標準偏差（情報強化）
 
 
-def determine_optimal_k_auto(features, k_range=(2, 10), plot=False):
+def determine_optimal_k_auto(features, k_range=(3, 10), plot=False):
     scaler = StandardScaler()
     scaled = scaler.fit_transform(features)
 
