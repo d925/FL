@@ -10,6 +10,9 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from utils import get_partitioned_data
 from config import num_clients
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+# または from umap import UMAP もあり（ただしインストール必要）
 
 
 def extract_features(client_id, model, device):
@@ -63,7 +66,22 @@ def determine_optimal_k(features, k_range=(2, 10)):
     optimal_k = max(elbow_k, best_silhouette_k)
     print(f"🧠 エルボー法による k: {elbow_k}, シルエット法による k: {best_silhouette_k}, 採用 k: {optimal_k}")
     return optimal_k
+def visualize_clusters(features, cluster_ids):
+    tsne = TSNE(n_components=2, random_state=42, perplexity=5)
+    reduced = tsne.fit_transform(features)
 
+    plt.figure(figsize=(8, 6))
+    for cluster in np.unique(cluster_ids):
+        idx = cluster_ids == cluster
+        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
+
+    plt.legend()
+    plt.title("Client Feature Clusters (t-SNE 2D Projection)")
+    plt.xlabel("TSNE Dim 1")
+    plt.ylabel("TSNE Dim 2")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -95,4 +113,6 @@ def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_compo
     cluster_ids = kmeans.fit_predict(processed_features)
 
     print(f"🔍 決定されたクラスタ数: {optimal_k}")
+    visualize_clusters(processed_features, np.array([cluster_ids[cid] for cid in range(num_clients)]))
+
     return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
