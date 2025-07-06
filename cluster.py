@@ -68,7 +68,7 @@ def determine_optimal_k_auto(features, k_range=(2, 15), plot=False):
     print(f"🟢 自動判定された最適クラスタ数 k: {best_k}")
     return best_k, scaler, pca
 
-def cluster_clients_improved(num_clients, feature_extractor=None, k_range=(2, 15), plot=False):
+def cluster_clients(num_clients, feature_extractor=None, k_range=(2, 15), plot=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if feature_extractor is None:
