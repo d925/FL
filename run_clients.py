@@ -1,7 +1,9 @@
 import os
 import json
-from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction
+from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction, lr_scheduler_step, lr_scheduler_gamma, warmup_rounds
 from adaptive_aggregation import AdaptiveAggregation
+from smart_client_selection import SmartClientSelection
+from class_balancing import ClassBalancingLoss, FocalLoss
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
@@ -43,12 +45,19 @@ total_samples = 0
 
 # クライアントクラス定義
 class FLClient(NumPyClient):
-    def __init__(self, cid, active_cids):
+    def __init__(self, cid, active_cids, round_num=1):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CNN(num_classes=num_labels).to(self.device)
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.model.parameters(), lr=learning_rate)
+        
+        # Initialize class balancing loss
+        self.class_balancer = ClassBalancingLoss(num_classes=num_labels, strategy='focal')
+        self.criterion = self.class_balancer.get_loss_function()
+        self.round_num = round_num
+        
+        # Adaptive learning rate with warmup and scheduling
+        self.current_lr = self._calculate_adaptive_lr(round_num)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.current_lr)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
@@ -57,6 +66,20 @@ class FLClient(NumPyClient):
         else:
             self.trainloader = []
             self.testloader = []
+    
+    def _calculate_adaptive_lr(self, round_num):
+        """Calculate adaptive learning rate with warmup and decay."""
+        base_lr = learning_rate
+        
+        # Warmup phase
+        if round_num <= warmup_rounds:
+            # Linear warmup from 0.1 * base_lr to base_lr
+            warmup_factor = 0.1 + 0.9 * (round_num - 1) / max(1, warmup_rounds - 1)
+            return base_lr * warmup_factor
+        
+        # Decay phase
+        decay_steps = (round_num - warmup_rounds) // lr_scheduler_step
+        return base_lr * (lr_scheduler_gamma ** decay_steps)
 
     def get_parameters(self, config):
         return [p.detach().cpu().numpy() for p in self.model.parameters()]
@@ -68,12 +91,21 @@ class FLClient(NumPyClient):
     def fit(self, parameters, config):
         if not self.trainloader:
             return self.get_parameters(config), 0, {}
+        
+        # Update learning rate based on current round
+        current_round = config.get("server_round", 1)
+        self.current_lr = self._calculate_adaptive_lr(current_round)
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.current_lr
+        
+        print(f"[Client {self.cid}] Round {current_round}: LR = {self.current_lr:.6f}")
+        
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
         mu = config.get("proximal_mu", proximal_mu)
 
         self.model.train()
-        for _ in range(local_epochs):
+        for epoch in range(local_epochs):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()

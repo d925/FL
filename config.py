@@ -7,11 +7,16 @@ num_labels = int(os.getenv('FL_NUM_LABELS', 38))
 alpha = float(os.getenv('FL_ALPHA', 0.1))  # Stronger non-IID for better heterogeneity
 is_cluster = os.getenv('FL_USE_CLUSTER', 'True').lower() == 'true'
 
-# Memory-efficient settings
+# Memory-efficient settings with improved parameters
 batch_size = int(os.getenv('FL_BATCH_SIZE', 16))  # Reduced from 32 for memory
-learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.01))
-local_epochs = int(os.getenv('FL_LOCAL_EPOCHS', 3))  # Reduced from 5
-proximal_mu = float(os.getenv('FL_PROXIMAL_MU', 0.1))
+learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.03))  # Increased for faster convergence
+local_epochs = int(os.getenv('FL_LOCAL_EPOCHS', 5))  # Increased for better local learning
+proximal_mu = float(os.getenv('FL_PROXIMAL_MU', 0.2))  # Increased for stronger regularization
+
+# Learning rate scheduling
+lr_scheduler_step = int(os.getenv('FL_LR_SCHEDULER_STEP', 50))  # Decay every 50 rounds
+lr_scheduler_gamma = float(os.getenv('FL_LR_SCHEDULER_GAMMA', 0.8))  # Decay factor
+warmup_rounds = int(os.getenv('FL_WARMUP_ROUNDS', 10))  # Warmup period
 
 # Clustering Configuration
 max_clusters = int(os.getenv('FL_MAX_CLUSTERS', 8))

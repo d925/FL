@@ -1,374 +1,276 @@
-# Smart Client Selection Strategies for Non-IID Federated Learning
-import torch
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-from collections import defaultdict
+import torch
 import random
-import math
+from typing import List, Dict, Tuple, Any
+from collections import defaultdict
+import json
 
-class DiversityBasedSelector:
+class SmartClientSelection:
     """
-    Selects clients based on data diversity to ensure representative training
-    Memory impact: Low (only stores client statistics)
+    Smart client selection strategy for non-IID federated learning.
+    Improves convergence by selecting diverse and high-quality clients.
     """
-    def __init__(self, selection_fraction: float = 0.3):
+    
+    def __init__(self, num_clients: int, selection_fraction: float = 0.6):
+        self.num_clients = num_clients
         self.selection_fraction = selection_fraction
-        self.client_stats = {}
-        self.client_label_distributions = {}
+        self.client_history = {}
+        self.round_counter = 0
         
+        # Selection strategies
+        self.strategies = {
+            'diversity': self._diversity_based_selection,
+            'performance': self._performance_based_selection,
+            'staleness': self._staleness_based_selection,
+            'hybrid': self._hybrid_selection
+        }
+        
+        # Strategy weights (will be adapted based on performance)
+        self.strategy_weights = {
+            'diversity': 0.4,
+            'performance': 0.3,
+            'staleness': 0.2,
+            'hybrid': 0.1
+        }
+    
     def select_clients(self, available_clients: List[int], 
-                      client_performances: Dict[int, float],
-                      client_label_counts: Dict[int, Dict[int, int]]) -> List[int]:
+                      client_metrics: Dict[int, Dict] = None,
+                      strategy: str = 'hybrid') -> List[int]:
         """
-        Select diverse clients based on label distribution and performance
+        Select clients for the current round.
         
         Args:
             available_clients: List of available client IDs
-            client_performances: Dict of client_id -> accuracy
-            client_label_counts: Dict of client_id -> {label: count}
-        """
-        if not available_clients:
-            return []
+            client_metrics: Recent performance metrics for clients
+            strategy: Selection strategy to use
             
+        Returns:
+            List of selected client IDs
+        """
+        self.round_counter += 1
+        
+        # Number of clients to select
         num_to_select = max(1, int(len(available_clients) * self.selection_fraction))
         
-        # Update client statistics
-        for client_id in available_clients:
-            if client_id in client_label_counts:
-                self.client_label_distributions[client_id] = client_label_counts[client_id]
+        if strategy not in self.strategies:
+            strategy = 'hybrid'
+        
+        # Update client history if metrics provided
+        if client_metrics:
+            self._update_client_history(client_metrics)
+        
+        # Apply selection strategy
+        selected_clients = self.strategies[strategy](available_clients, num_to_select)
+        
+        # Update selection history
+        for client_id in selected_clients:
+            if client_id not in self.client_history:
+                self.client_history[client_id] = {}
+            self.client_history[client_id]['last_selected_round'] = self.round_counter
+            self.client_history[client_id]['selection_count'] = \
+                self.client_history[client_id].get('selection_count', 0) + 1
+        
+        return selected_clients
+    
+    def _diversity_based_selection(self, available_clients: List[int], 
+                                 num_to_select: int) -> List[int]:
+        """Select clients to maximize diversity."""
+        if not self.client_history:
+            # Random selection for first few rounds
+            return random.sample(available_clients, 
+                               min(num_to_select, len(available_clients)))
         
         # Calculate diversity scores
-        diversity_scores = self._calculate_diversity_scores(available_clients)
-        
-        # Combine diversity and performance
-        combined_scores = {}
-        for client_id in available_clients:
-            performance = client_performances.get(client_id, 0.5)
-            diversity = diversity_scores.get(client_id, 0.5)
-            
-            # Weighted combination (favor diversity slightly for non-IID)
-            combined_scores[client_id] = 0.3 * performance + 0.7 * diversity
-        
-        # Select top clients
-        selected = sorted(combined_scores.keys(), 
-                         key=lambda x: combined_scores[x], reverse=True)[:num_to_select]
-        
-        return selected
-    
-    def _calculate_diversity_scores(self, clients: List[int]) -> Dict[int, float]:
-        """Calculate diversity scores based on label distribution differences"""
         diversity_scores = {}
         
-        if len(clients) <= 1:
-            return {client: 1.0 for client in clients}
-        
-        # Calculate pairwise diversity
-        for client_id in clients:
-            if client_id not in self.client_label_distributions:
-                diversity_scores[client_id] = 0.5
-                continue
+        for client_id in available_clients:
+            score = 0.0
+            
+            # Prefer clients with different performance patterns
+            if client_id in self.client_history:
+                client_data = self.client_history[client_id]
                 
-            client_dist = self.client_label_distributions[client_id]
-            diversities = []
+                # Accuracy diversity (prefer outliers)
+                avg_acc = np.mean([h.get('accuracy', 0.5) for h in self.client_history.values() 
+                                 if 'accuracy' in h])
+                client_acc = client_data.get('accuracy', 0.5)
+                score += abs(client_acc - avg_acc) * 2.0
+                
+                # Loss diversity
+                avg_loss = np.mean([h.get('loss', 1.0) for h in self.client_history.values() 
+                                  if 'loss' in h])
+                client_loss = client_data.get('loss', 1.0)
+                score += abs(client_loss - avg_loss) * 1.0
+                
+                # Data size diversity
+                avg_samples = np.mean([h.get('num_samples', 100) for h in self.client_history.values() 
+                                     if 'num_samples' in h])
+                client_samples = client_data.get('num_samples', 100)
+                score += abs(client_samples - avg_samples) / avg_samples
             
-            for other_id in clients:
-                if other_id != client_id and other_id in self.client_label_distributions:
-                    other_dist = self.client_label_distributions[other_id]
-                    diversity = self._calculate_distribution_distance(client_dist, other_dist)
-                    diversities.append(diversity)
-            
-            # Average diversity with other clients
-            diversity_scores[client_id] = np.mean(diversities) if diversities else 0.5
+            diversity_scores[client_id] = score
         
-        return diversity_scores
+        # Select top diverse clients
+        sorted_clients = sorted(available_clients, 
+                              key=lambda x: diversity_scores.get(x, 0), 
+                              reverse=True)
+        
+        return sorted_clients[:num_to_select]
     
-    def _calculate_distribution_distance(self, dist1: Dict[int, int], 
-                                       dist2: Dict[int, int]) -> float:
-        """Calculate Jensen-Shannon divergence between two label distributions"""
-        all_labels = set(dist1.keys()) | set(dist2.keys())
+    def _performance_based_selection(self, available_clients: List[int], 
+                                   num_to_select: int) -> List[int]:
+        """Select high-performing clients."""
+        if not self.client_history:
+            return random.sample(available_clients, 
+                               min(num_to_select, len(available_clients)))
         
-        if not all_labels:
-            return 0.0
+        # Calculate performance scores
+        performance_scores = {}
         
-        # Normalize distributions
-        total1 = sum(dist1.values())
-        total2 = sum(dist2.values())
-        
-        if total1 == 0 or total2 == 0:
-            return 0.0
-        
-        p1 = np.array([dist1.get(label, 0) / total1 for label in all_labels])
-        p2 = np.array([dist2.get(label, 0) / total2 for label in all_labels])
-        
-        # Jensen-Shannon divergence
-        m = 0.5 * (p1 + p2)
-        
-        # Avoid log(0)
-        p1 = np.maximum(p1, 1e-10)
-        p2 = np.maximum(p2, 1e-10)
-        m = np.maximum(m, 1e-10)
-        
-        kl1 = np.sum(p1 * np.log(p1 / m))
-        kl2 = np.sum(p2 * np.log(p2 / m))
-        
-        js_div = 0.5 * (kl1 + kl2)
-        return js_div
-
-class PowerOfChoiceSelector:
-    """
-    Power-of-choice client selection for better convergence in non-IID settings
-    Memory impact: Minimal (only stores recent client metrics)
-    """
-    def __init__(self, selection_fraction: float = 0.3, choice_factor: int = 2):
-        self.selection_fraction = selection_fraction
-        self.choice_factor = choice_factor  # Sample choice_factor * target_num clients
-        self.client_losses = {}
-        self.client_staleness = {}
-        
-    def select_clients(self, available_clients: List[int], 
-                      client_losses: Dict[int, float],
-                      round_number: int) -> List[int]:
-        """
-        Select clients using power-of-choice with loss and staleness
-        """
-        if not available_clients:
-            return []
-            
-        num_to_select = max(1, int(len(available_clients) * self.selection_fraction))
-        
-        # Update client information
-        self.client_losses.update(client_losses)
-        
-        # Update staleness (rounds since last selection)
         for client_id in available_clients:
-            if client_id not in self.client_staleness:
-                self.client_staleness[client_id] = 0
-            self.client_staleness[client_id] += 1
+            if client_id in self.client_history:
+                client_data = self.client_history[client_id]
+                
+                # Combine accuracy and inverse loss
+                accuracy = client_data.get('accuracy', 0.0)
+                loss = client_data.get('loss', 10.0)
+                
+                # Performance score (higher is better)
+                score = accuracy - 0.1 * loss
+                
+                # Bonus for consistent performance
+                if 'accuracy_history' in client_data:
+                    acc_std = np.std(client_data['accuracy_history'])
+                    score += 0.1 / (1.0 + acc_std)  # Bonus for stability
+                
+                performance_scores[client_id] = score
+            else:
+                performance_scores[client_id] = 0.0
         
-        # Power-of-choice selection
-        candidate_pool_size = min(len(available_clients), 
-                                 self.choice_factor * num_to_select)
+        # Select top performing clients
+        sorted_clients = sorted(available_clients, 
+                              key=lambda x: performance_scores.get(x, 0), 
+                              reverse=True)
         
-        # Sample candidates
-        candidates = random.sample(available_clients, candidate_pool_size)
+        return sorted_clients[:num_to_select]
+    
+    def _staleness_based_selection(self, available_clients: List[int], 
+                                 num_to_select: int) -> List[int]:
+        """Select clients that haven't participated recently."""
+        staleness_scores = {}
         
-        # Calculate selection scores (higher loss + higher staleness = higher priority)
-        scores = {}
-        for client_id in candidates:
-            loss = self.client_losses.get(client_id, 1.0)
-            staleness = self.client_staleness.get(client_id, 1)
-            
-            # Combine loss and staleness (both should be higher for selection)
-            scores[client_id] = loss + 0.1 * staleness
-        
-        # Select top clients
-        selected = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:num_to_select]
-        
-        # Reset staleness for selected clients
-        for client_id in selected:
-            self.client_staleness[client_id] = 0
-        
-        return selected
-
-class ClusterAwareSelector:
-    """
-    Selects clients ensuring representation from different clusters
-    Memory impact: Low (only stores cluster information)
-    """
-    def __init__(self, selection_fraction: float = 0.3):
-        self.selection_fraction = selection_fraction
-        self.client_clusters = {}
-        
-    def update_clusters(self, client_cluster_map: Dict[int, int]):
-        """Update client cluster assignments"""
-        self.client_clusters = client_cluster_map
-        
-    def select_clients(self, available_clients: List[int], 
-                      client_performances: Dict[int, float]) -> List[int]:
-        """
-        Select clients ensuring cluster diversity
-        """
-        if not available_clients:
-            return []
-            
-        num_to_select = max(1, int(len(available_clients) * self.selection_fraction))
-        
-        # Group clients by cluster
-        cluster_clients = defaultdict(list)
         for client_id in available_clients:
-            cluster_id = self.client_clusters.get(client_id, 0)
-            cluster_clients[cluster_id].append(client_id)
+            if client_id in self.client_history:
+                last_round = self.client_history[client_id].get('last_selected_round', 0)
+                staleness = self.round_counter - last_round
+                
+                # Higher score for more stale clients
+                staleness_scores[client_id] = staleness
+            else:
+                # New clients get high priority
+                staleness_scores[client_id] = float('inf')
         
-        if not cluster_clients:
-            return random.sample(available_clients, num_to_select)
+        # Select most stale clients
+        sorted_clients = sorted(available_clients, 
+                              key=lambda x: staleness_scores.get(x, 0), 
+                              reverse=True)
         
-        # Select clients from each cluster proportionally
-        selected = []
-        clusters = list(cluster_clients.keys())
+        return sorted_clients[:num_to_select]
+    
+    def _hybrid_selection(self, available_clients: List[int], 
+                        num_to_select: int) -> List[int]:
+        """Hybrid selection combining multiple strategies."""
         
-        # Calculate per-cluster selections
-        clients_per_cluster = num_to_select // len(clusters)
-        remaining = num_to_select % len(clusters)
+        # Get selections from different strategies
+        diversity_clients = self._diversity_based_selection(available_clients, num_to_select)
+        performance_clients = self._performance_based_selection(available_clients, num_to_select)
+        staleness_clients = self._staleness_based_selection(available_clients, num_to_select)
         
-        for i, cluster_id in enumerate(clusters):
-            cluster_clients_list = cluster_clients[cluster_id]
+        # Combine with weighted scores
+        combined_scores = defaultdict(float)
+        
+        # Diversity contribution
+        for i, client_id in enumerate(diversity_clients):
+            combined_scores[client_id] += self.strategy_weights['diversity'] * (num_to_select - i)
+        
+        # Performance contribution
+        for i, client_id in enumerate(performance_clients):
+            combined_scores[client_id] += self.strategy_weights['performance'] * (num_to_select - i)
+        
+        # Staleness contribution
+        for i, client_id in enumerate(staleness_clients):
+            combined_scores[client_id] += self.strategy_weights['staleness'] * (num_to_select - i)
+        
+        # Select top combined scores
+        sorted_clients = sorted(available_clients, 
+                              key=lambda x: combined_scores.get(x, 0), 
+                              reverse=True)
+        
+        return sorted_clients[:num_to_select]
+    
+    def _update_client_history(self, client_metrics: Dict[int, Dict]):
+        """Update client history with latest metrics."""
+        for client_id, metrics in client_metrics.items():
+            if client_id not in self.client_history:
+                self.client_history[client_id] = {
+                    'accuracy_history': [],
+                    'loss_history': []
+                }
             
-            # Number to select from this cluster
-            to_select = clients_per_cluster
-            if i < remaining:
-                to_select += 1
+            client_data = self.client_history[client_id]
             
-            to_select = min(to_select, len(cluster_clients_list))
+            # Update current metrics
+            client_data['accuracy'] = metrics.get('accuracy', 0.0)
+            client_data['loss'] = metrics.get('loss', 10.0)
+            client_data['num_samples'] = metrics.get('num_samples', 0)
             
-            # Select best performing clients from this cluster
-            cluster_performances = {cid: client_performances.get(cid, 0.5) 
-                                  for cid in cluster_clients_list}
+            # Update history (keep last 10 values for memory efficiency)
+            client_data['accuracy_history'].append(metrics.get('accuracy', 0.0))
+            client_data['loss_history'].append(metrics.get('loss', 10.0))
             
-            cluster_selected = sorted(cluster_performances.keys(), 
-                                    key=lambda x: cluster_performances[x], 
-                                    reverse=True)[:to_select]
-            
-            selected.extend(cluster_selected)
-        
-        return selected
-
-class GradientBasedSelector:
-    """
-    Selects clients based on gradient similarity and magnitude
-    Memory impact: Moderate (stores gradient statistics)
-    """
-    def __init__(self, selection_fraction: float = 0.3, gradient_threshold: float = 0.1):
-        self.selection_fraction = selection_fraction
-        self.gradient_threshold = gradient_threshold
-        self.client_gradient_norms = {}
-        self.global_gradient_norm = 0.0
-        
-    def select_clients(self, available_clients: List[int], 
-                      client_gradients: Dict[int, Dict[str, torch.Tensor]]) -> List[int]:
-        """
-        Select clients based on gradient information
-        """
-        if not available_clients:
-            return []
-            
-        num_to_select = max(1, int(len(available_clients) * self.selection_fraction))
-        
-        # Calculate gradient norms
-        gradient_norms = {}
-        for client_id in available_clients:
-            if client_id in client_gradients:
-                grad_norm = self._calculate_gradient_norm(client_gradients[client_id])
-                gradient_norms[client_id] = grad_norm
-                self.client_gradient_norms[client_id] = grad_norm
-        
-        if not gradient_norms:
-            return random.sample(available_clients, num_to_select)
-        
-        # Select clients with significant gradients
-        significant_clients = []
-        for client_id, grad_norm in gradient_norms.items():
-            if grad_norm > self.gradient_threshold:
-                significant_clients.append(client_id)
-        
-        if len(significant_clients) >= num_to_select:
-            # Select from significant clients
-            selected = sorted(significant_clients, 
-                            key=lambda x: gradient_norms[x], 
-                            reverse=True)[:num_to_select]
+            if len(client_data['accuracy_history']) > 10:
+                client_data['accuracy_history'] = client_data['accuracy_history'][-10:]
+                client_data['loss_history'] = client_data['loss_history'][-10:]
+    
+    def adapt_strategy_weights(self, global_performance: float):
+        """Adapt strategy weights based on global performance."""
+        # If performance is poor, emphasize diversity and staleness
+        if global_performance < 0.3:
+            self.strategy_weights.update({
+                'diversity': 0.5,
+                'performance': 0.2,
+                'staleness': 0.3,
+                'hybrid': 0.0
+            })
+        # If performance is moderate, balance all strategies
+        elif global_performance < 0.7:
+            self.strategy_weights.update({
+                'diversity': 0.3,
+                'performance': 0.4,
+                'staleness': 0.2,
+                'hybrid': 0.1
+            })
+        # If performance is good, emphasize performance
         else:
-            # Include all significant clients and fill with others
-            remaining = num_to_select - len(significant_clients)
-            other_clients = [c for c in available_clients if c not in significant_clients]
-            
-            additional = sorted(other_clients, 
-                              key=lambda x: gradient_norms.get(x, 0), 
-                              reverse=True)[:remaining]
-            
-            selected = significant_clients + additional
-        
-        return selected
+            self.strategy_weights.update({
+                'diversity': 0.2,
+                'performance': 0.6,
+                'staleness': 0.1,
+                'hybrid': 0.1
+            })
     
-    def _calculate_gradient_norm(self, gradients: Dict[str, torch.Tensor]) -> float:
-        """Calculate L2 norm of gradients"""
-        total_norm = 0.0
-        for grad in gradients.values():
-            total_norm += torch.norm(grad).item() ** 2
-        return math.sqrt(total_norm)
-
-class AdaptiveSelector:
-    """
-    Adaptive client selection that combines multiple strategies
-    Memory impact: Moderate (combines multiple selectors)
-    """
-    def __init__(self, selection_fraction: float = 0.3):
-        self.selection_fraction = selection_fraction
-        self.diversity_selector = DiversityBasedSelector(selection_fraction)
-        self.power_selector = PowerOfChoiceSelector(selection_fraction)
-        self.cluster_selector = ClusterAwareSelector(selection_fraction)
+    def get_selection_stats(self) -> Dict:
+        """Get statistics about client selection."""
+        if not self.client_history:
+            return {}
         
-        # Strategy weights (can be learned/adapted)
-        self.strategy_weights = {
-            'diversity': 0.4,
-            'power': 0.3,
-            'cluster': 0.3
+        selection_counts = [data.get('selection_count', 0) 
+                           for data in self.client_history.values()]
+        
+        return {
+            'total_clients': len(self.client_history),
+            'avg_selections': np.mean(selection_counts),
+            'std_selections': np.std(selection_counts),
+            'min_selections': np.min(selection_counts),
+            'max_selections': np.max(selection_counts)
         }
-        
-    def select_clients(self, available_clients: List[int], 
-                      client_performances: Dict[int, float],
-                      client_losses: Dict[int, float],
-                      client_label_counts: Dict[int, Dict[int, int]],
-                      client_cluster_map: Dict[int, int],
-                      round_number: int) -> List[int]:
-        """
-        Adaptive selection combining multiple strategies
-        """
-        if not available_clients:
-            return []
-            
-        num_to_select = max(1, int(len(available_clients) * self.selection_fraction))
-        
-        # Update cluster information
-        self.cluster_selector.update_clusters(client_cluster_map)
-        
-        # Get selections from each strategy
-        diversity_selected = self.diversity_selector.select_clients(
-            available_clients, client_performances, client_label_counts)
-        
-        power_selected = self.power_selector.select_clients(
-            available_clients, client_losses, round_number)
-        
-        cluster_selected = self.cluster_selector.select_clients(
-            available_clients, client_performances)
-        
-        # Combine selections with weighted voting
-        client_scores = defaultdict(float)
-        
-        for client_id in diversity_selected:
-            client_scores[client_id] += self.strategy_weights['diversity']
-        
-        for client_id in power_selected:
-            client_scores[client_id] += self.strategy_weights['power']
-        
-        for client_id in cluster_selected:
-            client_scores[client_id] += self.strategy_weights['cluster']
-        
-        # Select top clients
-        selected = sorted(client_scores.keys(), 
-                         key=lambda x: client_scores[x], reverse=True)[:num_to_select]
-        
-        # Fill with random selection if needed
-        if len(selected) < num_to_select:
-            remaining = [c for c in available_clients if c not in selected]
-            additional = random.sample(remaining, 
-                                     min(num_to_select - len(selected), len(remaining)))
-            selected.extend(additional)
-        
-        return selected
-    
-    def update_strategy_weights(self, strategy_performances: Dict[str, float]):
-        """Update strategy weights based on performance"""
-        total_performance = sum(strategy_performances.values())
-        if total_performance > 0:
-            for strategy, performance in strategy_performances.items():
-                if strategy in self.strategy_weights:
-                    self.strategy_weights[strategy] = performance / total_performance
