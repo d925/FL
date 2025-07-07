@@ -1,6 +1,7 @@
 import os
 import json
 from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction
+from adaptive_aggregation import AdaptiveAggregation
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
@@ -122,6 +123,9 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
         torch.cuda.set_per_process_memory_fraction(gpu_memory_fraction)
         torch.cuda.empty_cache()
 
+    # Initialize adaptive aggregation
+    adaptive_aggregator = AdaptiveAggregation(memory_efficient=True)
+    
     def aggregate_metrics(results):
         print("\n📊 このラウンドのクライアント評価結果:")
         for i, (num_examples, metrics) in enumerate(results):
@@ -129,19 +133,43 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
             loss = metrics["loss"]
             print(f"  Client {i}: Accuracy = {acc:.2f}%, Loss = {loss:.4f}, Samples = {num_examples}")
 
-        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
-        total_examples = total_examples if total_examples > 0 else 1
-        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        avg_accuracy = weighted_accuracy / total_examples
-        avg_loss = weighted_loss / total_examples
+        # Adaptive aggregation for better performance
+        client_metrics = [(num_examples, metrics) for num_examples, metrics in results if num_examples > 0]
+        
+        if client_metrics:
+            # Calculate adaptive weighted metrics
+            total_examples = sum(num_examples for num_examples, _ in client_metrics)
+            
+            # Performance-based weights (inverse loss weighting)
+            weights = []
+            for num_examples, metrics in client_metrics:
+                loss = metrics["loss"]
+                # Higher weight for lower loss (better performance)
+                weight = num_examples / (1.0 + loss)
+                weights.append(weight)
+            
+            # Normalize weights
+            total_weight = sum(weights)
+            weights = [w / total_weight for w in weights]
+            
+            # Adaptive weighted aggregation
+            weighted_accuracy = sum(weights[i] * metrics["accuracy"] 
+                                  for i, (_, metrics) in enumerate(client_metrics))
+            weighted_loss = sum(weights[i] * metrics["loss"] 
+                              for i, (_, metrics) in enumerate(client_metrics))
+            
+            print(f"🧠 Adaptive weighting applied - Weight distribution: {[f'{w:.3f}' for w in weights]}")
+        else:
+            weighted_accuracy = 0.0
+            weighted_loss = 1.0
+            total_examples = 0
 
-        cluster_results["accuracy"] = avg_accuracy
-        cluster_results["loss"] = avg_loss
+        cluster_results["accuracy"] = weighted_accuracy
+        cluster_results["loss"] = weighted_loss
         cluster_results["samples"] = total_examples
-        cluster_results["correct"] = avg_accuracy * total_examples
+        cluster_results["correct"] = weighted_accuracy * total_examples
 
-        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
+        print(f"➡️ Adaptive aggregated accuracy: {weighted_accuracy * 100:.2f}%\n")
 
         # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
         output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
@@ -149,17 +177,18 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
         summary_file = os.path.join(output_dir, "round_metrics.jsonl")
 
         round_summary = {
-            "accuracy": avg_accuracy,
-            "loss": avg_loss,
+            "accuracy": weighted_accuracy,
+            "loss": weighted_loss,
             "samples": total_examples,
-            "correct": avg_accuracy * total_examples,
+            "correct": weighted_accuracy * total_examples,
+            "aggregation_type": "adaptive"
         }
 
         with open(summary_file, "a") as f:
             json.dump(round_summary, f)
             f.write("\n")  # JSONL形式で追記
 
-        return {"accuracy": avg_accuracy, "loss": avg_loss}
+        return {"accuracy": weighted_accuracy, "loss": weighted_loss}
 
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,

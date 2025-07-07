@@ -4,7 +4,7 @@ import os
 num_clients = int(os.getenv('FL_NUM_CLIENTS', 50))
 num_rounds = int(os.getenv('FL_NUM_ROUNDS', 200))
 num_labels = int(os.getenv('FL_NUM_LABELS', 38))
-alpha = float(os.getenv('FL_ALPHA', 1.0))
+alpha = float(os.getenv('FL_ALPHA', 0.1))  # Stronger non-IID for better heterogeneity
 is_cluster = os.getenv('FL_USE_CLUSTER', 'True').lower() == 'true'
 
 # Memory-efficient settings
@@ -24,6 +24,14 @@ cache_cleanup_interval = int(os.getenv('FL_CACHE_CLEANUP_INTERVAL', 10))
 # Data Configuration
 train_test_split = float(os.getenv('FL_TRAIN_TEST_SPLIT', 0.8))
 image_size = int(os.getenv('FL_IMAGE_SIZE', 64))  # Reduced from 128 for memory
+
+# Non-IID Enhancement Configuration
+class_imbalance_ratio = float(os.getenv('FL_CLASS_IMBALANCE_RATIO', 0.7))  # Introduce class imbalance
+min_samples_per_client = int(os.getenv('FL_MIN_SAMPLES_PER_CLIENT', 10))  # Minimum samples per client
+
+# Plant Disease Augmentation Configuration
+augmentation_severity = float(os.getenv('FL_AUGMENTATION_SEVERITY', 0.6))  # Augmentation intensity
+enable_advanced_augmentation = os.getenv('FL_ENABLE_ADVANCED_AUG', 'True').lower() == 'true'
 
 # Validation
 if num_clients <= 0:

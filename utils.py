@@ -143,16 +143,17 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 
 
 def get_partitioned_data(client_id: int, num_clients: int):
-    # Memory-efficient data loading with proper transforms
+    # Memory-efficient data loading with plant disease specific augmentation
     from config import image_size
+    from plant_disease_augmentation import PlantDiseaseAugmentation
     
-    train_transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet stats
-    ])
+    # Initialize plant disease augmentation
+    plant_augment = PlantDiseaseAugmentation(severity=0.6, enable_advanced=True)
+    
+    # Training transforms with plant disease specific augmentation
+    train_transform = plant_augment.get_training_transforms(image_size=image_size)
 
+    # Test transforms (no augmentation)
     test_transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
