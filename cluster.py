@@ -12,7 +12,6 @@ from utils import get_partitioned_data
 from config import num_clients
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
-# または from umap import UMAP もあり（ただしインストール必要）
 
 
 def extract_features(client_id, model, device):
@@ -86,21 +85,31 @@ def visualize_clusters(features, cluster_ids):
 def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # モデル初期化
+    # Fix: Use same CNN architecture as FL training for consistency
+    # Memory-efficient: Use smaller feature extractor instead of ResNet18
     if feature_extractor is None:
-        model = resnet18(pretrained=True)
-        model.fc = nn.Identity()  # 出力を特徴量に
+        from model import CNN
+        model = CNN(num_classes=128)  # Use as feature extractor
+        model.fc2 = nn.Identity()  # Remove final classification layer
     else:
         model = feature_extractor
     model.to(device)
 
-    # 各クライアントの特徴量抽出
+    # Memory-efficient: Extract features in batches and clear cache
     client_features = []
     for cid in range(num_clients):
         feat = extract_features(cid, model, device)
         client_features.append(feat)
+        
+        # Clear GPU cache every 10 clients to prevent memory overflow
+        if (cid + 1) % 10 == 0:
+            torch.cuda.empty_cache()
 
     client_features = np.vstack(client_features)
+    
+    # Clear model from GPU memory after feature extraction
+    model.cpu()
+    torch.cuda.empty_cache()
 
     # 特徴量前処理（標準化 + 次元削減）
     processed_features = preprocess_features(client_features, use_pca=use_pca, n_components=pca_components)

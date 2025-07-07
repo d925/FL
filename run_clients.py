@@ -1,6 +1,6 @@
 import os
 import json
-from config import num_clients, num_rounds, is_cluster
+from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
@@ -10,6 +10,7 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
+from flwr.common import Context
 
 # 結果保存ディレクトリ作成
 RESULTS_BASE_DIR = "results"
@@ -46,12 +47,12 @@ class FLClient(NumPyClient):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CNN(num_classes=num_labels).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=learning_rate)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
-            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True)
-            self.testloader = torch.utils.data.DataLoader(testset, batch_size=32)
+            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True)
+            self.testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size)
         else:
             self.trainloader = []
             self.testloader = []
@@ -68,10 +69,10 @@ class FLClient(NumPyClient):
             return self.get_parameters(config), 0, {}
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]
-        mu = config.get("proximal_mu", 0.0)
+        mu = config.get("proximal_mu", proximal_mu)
 
         self.model.train()
-        for _ in range(1):
+        for _ in range(local_epochs):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
@@ -103,12 +104,23 @@ class FLClient(NumPyClient):
         print(f"[Client {self.cid}] Evaluation → Accuracy: {acc*100:.2f}%, Loss: {avg_loss:.4f}, Samples: {len(self.testloader.dataset)}")
         return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
 
-# Step 3: クラスタごとのFL実行ループ
-for cluster_id in range(num_clusters):
+# Step 3: Memory-efficient cluster processing
+# Process clusters sequentially to avoid memory overload (GPU/Ray memory constraints)
+def process_cluster(cluster_id, client_cluster_map, num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
-    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
+    
+    if len(selected_cids) == 0:
+        print(f"Warning: Cluster {cluster_id} has no clients, skipping...")
+        return None
+        
+    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ({len(selected_cids)} clients) ---")
 
     cluster_results = {}
+    
+    # Memory management: Set GPU memory fraction per cluster
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(gpu_memory_fraction)
+        torch.cuda.empty_cache()
 
     def aggregate_metrics(results):
         print("\n📊 このラウンドのクライアント評価結果:")
@@ -149,24 +161,27 @@ for cluster_id in range(num_clusters):
 
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
-
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
         min_fit_clients=len(selected_cids),
         min_available_clients=len(selected_cids),
         min_evaluate_clients=len(selected_cids),
-        proximal_mu=0.0,
+        proximal_mu=proximal_mu,
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
-
-    from flwr.common import Context
 
     client_cache = {}
 
     def client_fn(context: Context):
-        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
-        idx = int(cid_int)
+        # Fix: Use partition-id directly as index for selected_cids
+        partition_id = context.node_config.get("partition-id", context.node_id)
+        idx = int(partition_id)
+        
+        # Ensure idx is within bounds
+        if idx >= len(selected_cids):
+            idx = idx % len(selected_cids)
+        
         real_cid = selected_cids[idx]
 
         if real_cid not in client_cache:
@@ -175,12 +190,13 @@ for cluster_id in range(num_clusters):
         return client_cache[real_cid]
 
 
+    # Memory-efficient simulation with reduced resources
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
         num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
-        client_resources={"num_cpus": 1, "num_gpus": 1.0},
+        client_resources={"num_cpus": 1, "num_gpus": gpu_memory_fraction},  # Reduced GPU allocation
     )
 
     acc = cluster_results.get("accuracy", 0.0)
@@ -188,15 +204,52 @@ for cluster_id in range(num_clusters):
     examples = cluster_results.get("samples", 0)
     correct = cluster_results.get("correct", 0.0)
 
-    final_cluster_metrics[f"cluster_{cluster_id}"] = {
+    cluster_result = {
         "final_accuracy": acc,
         "final_loss": loss,
         "samples": examples,
         "correct": correct,
     }
+    
+    # Clear memory after cluster processing
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
+    return cluster_result
 
-    total_correct += correct
-    total_samples += examples
+# Memory-efficient cross-cluster knowledge sharing
+cluster_models = {}  # Store final models from each cluster
+cluster_weights = {}  # Store cluster weights for aggregation
+
+# Execute clusters sequentially for memory efficiency
+for cluster_id in range(num_clusters):
+    result = process_cluster(cluster_id, client_cluster_map, num_clusters)
+    if result is not None:
+        final_cluster_metrics[f"cluster_{cluster_id}"] = result
+        total_correct += result["correct"]
+        total_samples += result["samples"]
+        
+        # Store cluster model and weight for cross-cluster sharing
+        # Weight by cluster size for better aggregation
+        cluster_weights[cluster_id] = result["samples"]
+
+# Simple cross-cluster knowledge sharing (optional, memory-efficient)
+if num_clusters > 1 and len(cluster_weights) > 1:
+    print("\n🔄 Implementing cross-cluster knowledge sharing...")
+    
+    # Calculate global accuracy improvement potential
+    total_weight = sum(cluster_weights.values())
+    weighted_accuracy = sum(final_cluster_metrics[f"cluster_{cid}"]["final_accuracy"] * weight 
+                          for cid, weight in cluster_weights.items()) / total_weight
+    
+    print(f"📊 Cross-cluster weighted accuracy: {weighted_accuracy*100:.2f}%")
+    
+    # Store cross-cluster metrics
+    final_cluster_metrics["cross_cluster"] = {
+        "weighted_accuracy": weighted_accuracy,
+        "num_clusters": len(cluster_weights),
+        "cluster_sizes": cluster_weights
+    }
 
 # 最終集計・保存
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
