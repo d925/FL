@@ -7,16 +7,21 @@ num_labels = int(os.getenv('FL_NUM_LABELS', 38))
 alpha = float(os.getenv('FL_ALPHA', 0.1))  # Stronger non-IID for better heterogeneity
 is_cluster = os.getenv('FL_USE_CLUSTER', 'True').lower() == 'true'
 
-# Memory-efficient settings with improved parameters
+# Memory-efficient settings with emergency fixes
 batch_size = int(os.getenv('FL_BATCH_SIZE', 16))  # Reduced from 32 for memory
-learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.03))  # Increased for faster convergence
-local_epochs = int(os.getenv('FL_LOCAL_EPOCHS', 5))  # Increased for better local learning
-proximal_mu = float(os.getenv('FL_PROXIMAL_MU', 0.2))  # Increased for stronger regularization
+learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.001))  # ULTRA CONSERVATIVE: Even lower LR
+local_epochs = int(os.getenv('FL_LOCAL_EPOCHS', 2))  # EMERGENCY FIX: Reduced epochs
+proximal_mu = float(os.getenv('FL_PROXIMAL_MU', 0.5))  # EMERGENCY FIX: Strong regularization
 
-# Learning rate scheduling
-lr_scheduler_step = int(os.getenv('FL_LR_SCHEDULER_STEP', 50))  # Decay every 50 rounds
-lr_scheduler_gamma = float(os.getenv('FL_LR_SCHEDULER_GAMMA', 0.8))  # Decay factor
-warmup_rounds = int(os.getenv('FL_WARMUP_ROUNDS', 10))  # Warmup period
+# Learning rate scheduling (emergency fix)
+lr_scheduler_step = int(os.getenv('FL_LR_SCHEDULER_STEP', 30))  # More frequent decay
+lr_scheduler_gamma = float(os.getenv('FL_LR_SCHEDULER_GAMMA', 0.9))  # Gentler decay
+warmup_rounds = int(os.getenv('FL_WARMUP_ROUNDS', 5))  # Shorter warmup
+
+# Emergency stabilization settings
+gradient_clip_norm = float(os.getenv('FL_GRADIENT_CLIP_NORM', 1.0))  # Gradient clipping
+weight_decay = float(os.getenv('FL_WEIGHT_DECAY', 1e-4))  # L2 regularization
+early_stopping_patience = int(os.getenv('FL_EARLY_STOPPING_PATIENCE', 10))  # Early stopping
 
 # Clustering Configuration
 max_clusters = int(os.getenv('FL_MAX_CLUSTERS', 8))

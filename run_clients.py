@@ -1,6 +1,6 @@
 import os
 import json
-from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction, lr_scheduler_step, lr_scheduler_gamma, warmup_rounds
+from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction, lr_scheduler_step, lr_scheduler_gamma, warmup_rounds, gradient_clip_norm, weight_decay, early_stopping_patience
 from adaptive_aggregation import AdaptiveAggregation
 from smart_client_selection import SmartClientSelection
 from class_balancing import ClassBalancingLoss, FocalLoss
@@ -50,14 +50,20 @@ class FLClient(NumPyClient):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CNN(num_classes=num_labels).to(self.device)
         
-        # Initialize class balancing loss
-        self.class_balancer = ClassBalancingLoss(num_classes=num_labels, strategy='focal')
-        self.criterion = self.class_balancer.get_loss_function()
+        # EMERGENCY: Use simple CrossEntropy instead of complex loss
+        # self.class_balancer = ClassBalancingLoss(num_classes=num_labels, strategy='focal')
+        # self.criterion = self.class_balancer.get_loss_function()
+        self.criterion = nn.CrossEntropyLoss()  # Back to basics
         self.round_num = round_num
         
         # Adaptive learning rate with warmup and scheduling
         self.current_lr = self._calculate_adaptive_lr(round_num)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.current_lr)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.current_lr, 
+                                 weight_decay=weight_decay, momentum=0.9)  # Added regularization
+        
+        # Emergency performance tracking
+        self.last_loss = float('inf')
+        self.patience_counter = 0
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
@@ -71,15 +77,17 @@ class FLClient(NumPyClient):
         """Calculate adaptive learning rate with warmup and decay."""
         base_lr = learning_rate
         
-        # Warmup phase
-        if round_num <= warmup_rounds:
-            # Linear warmup from 0.1 * base_lr to base_lr
-            warmup_factor = 0.1 + 0.9 * (round_num - 1) / max(1, warmup_rounds - 1)
-            return base_lr * warmup_factor
+        # EMERGENCY: Start very conservatively
+        if round_num <= 20:  # Extended conservative period
+            # Very gentle start
+            return base_lr * 0.5  # Even more conservative
         
-        # Decay phase
-        decay_steps = (round_num - warmup_rounds) // lr_scheduler_step
-        return base_lr * (lr_scheduler_gamma ** decay_steps)
+        # Very gentle decay
+        if round_num > 50:
+            decay_factor = 0.95 ** ((round_num - 50) // 20)  # Slower decay
+            return base_lr * 0.5 * decay_factor
+        
+        return base_lr * 0.5
 
     def get_parameters(self, config):
         return [p.detach().cpu().numpy() for p in self.model.parameters()]
@@ -105,18 +113,48 @@ class FLClient(NumPyClient):
         mu = config.get("proximal_mu", proximal_mu)
 
         self.model.train()
+        epoch_losses = []
+        
         for epoch in range(local_epochs):
+            epoch_loss = 0.0
+            batch_count = 0
+            
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
+                
+                # FedProx regularization
                 if mu > 0:
-                    prox_term = sum(((param - gparam.to(self.device))**2).sum() for param, gparam in zip(self.model.parameters(), global_params))
+                    prox_term = sum(((param - gparam.to(self.device))**2).sum() 
+                                  for param, gparam in zip(self.model.parameters(), global_params))
                     loss += (mu / 2) * prox_term
+                
                 loss.backward()
+                
+                # EMERGENCY: Gradient clipping to prevent explosion
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_norm)
+                
                 self.optimizer.step()
-        return self.get_parameters(config), len(self.trainloader.dataset), {}
+                
+                epoch_loss += loss.item()
+                batch_count += 1
+            
+            avg_epoch_loss = epoch_loss / max(batch_count, 1)
+            epoch_losses.append(avg_epoch_loss)
+            
+            # EMERGENCY: Early stopping if loss is exploding
+            if avg_epoch_loss > 10.0:  # Emergency threshold
+                print(f"[Client {self.cid}] EMERGENCY: Loss exploding ({avg_epoch_loss:.4f}), stopping early")
+                break
+                
+        # Calculate average training loss
+        avg_train_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0.0
+        
+        print(f"[Client {self.cid}] Training complete - Avg Loss: {avg_train_loss:.4f}")
+        
+        return self.get_parameters(config), len(self.trainloader.dataset), {"train_loss": avg_train_loss}
 
     def evaluate(self, parameters, config):
         if not self.testloader:
