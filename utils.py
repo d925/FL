@@ -147,11 +147,32 @@ def get_partitioned_data(client_id: int, num_clients: int):
     from config import image_size
     from plant_disease_augmentation import PlantDiseaseAugmentation
     
-    # Initialize plant disease augmentation
-    plant_augment = PlantDiseaseAugmentation(severity=0.6, enable_advanced=True)
+    # MAJOR UPGRADE: Advanced PlantVillage-specific augmentation
+    from plant_disease_augmentation import PlantDiseaseAugmentation
     
-    # Training transforms with plant disease specific augmentation
-    train_transform = plant_augment.get_training_transforms(image_size=image_size)
+    # Higher severity for better generalization on complex PlantVillage dataset
+    plant_augment = PlantDiseaseAugmentation(severity=0.8, enable_advanced=True)
+    
+    # Training transforms with enhanced augmentation for PlantVillage
+    train_transform = transforms.Compose([
+        transforms.Resize((image_size + 8, image_size + 8)),  # Slightly larger for random crop
+        transforms.RandomCrop(image_size),  # Random cropping
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.3),
+        transforms.RandomRotation(degrees=30),  # More aggressive rotation for plant images
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+        
+        # Advanced plant-specific augmentations
+        transforms.RandomApply([
+            transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1))
+        ], p=0.5),
+        
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        
+        # Random erasing to simulate occlusion/damaged parts
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.2), ratio=(0.3, 3.3))
+    ])
 
     # Test transforms (no augmentation)
     test_transform = transforms.Compose([

@@ -7,6 +7,7 @@ from class_balancing import ClassBalancingLoss, FocalLoss
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
+from plant_disease_model import PlantDiseaseClassifier, ProgressiveTrainingScheduler
 import flwr as fl
 from flwr.server import ServerConfig
 import torch
@@ -48,7 +49,16 @@ class FLClient(NumPyClient):
     def __init__(self, cid, active_cids, round_num=1):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = CNN(num_classes=num_labels).to(self.device)
+        
+        # MAJOR UPGRADE: Use PlantDisease-specific model instead of simple CNN
+        self.model = PlantDiseaseClassifier(
+            num_classes=num_labels, 
+            model_type='efficientnet_b0',  # Memory-efficient pretrained model
+            pretrained=True
+        ).to(self.device)
+        
+        # Progressive training scheduler
+        self.training_scheduler = ProgressiveTrainingScheduler(total_rounds=num_rounds)
         
         # EMERGENCY: Use simple CrossEntropy instead of complex loss
         # self.class_balancer = ClassBalancingLoss(num_classes=num_labels, strategy='focal')
@@ -100,13 +110,21 @@ class FLClient(NumPyClient):
         if not self.trainloader:
             return self.get_parameters(config), 0, {}
         
-        # Update learning rate based on current round
+        # MAJOR UPGRADE: Progressive training with adaptive configuration
         current_round = config.get("server_round", 1)
-        self.current_lr = self._calculate_adaptive_lr(current_round)
+        training_config = self.training_scheduler.get_training_config(current_round)
+        
+        # Apply progressive training configuration
+        self.current_lr = training_config['learning_rate']
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = self.current_lr
         
-        print(f"[Client {self.cid}] Round {current_round}: LR = {self.current_lr:.6f}")
+        # Unfreeze backbone if needed
+        if training_config['unfreeze_backbone'] and hasattr(self.model, 'unfreeze_backbone'):
+            self.model.unfreeze_backbone()
+        
+        print(f"[Client {self.cid}] Round {current_round}: LR = {self.current_lr:.6f}, "
+              f"Unfreeze: {training_config['unfreeze_backbone']}")
         
         self.set_parameters(parameters)
         global_params = [p.clone().detach() for p in self.model.parameters()]

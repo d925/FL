@@ -9,7 +9,7 @@ is_cluster = os.getenv('FL_USE_CLUSTER', 'True').lower() == 'true'
 
 # Memory-efficient settings with emergency fixes
 batch_size = int(os.getenv('FL_BATCH_SIZE', 16))  # Reduced from 32 for memory
-learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.001))  # ULTRA CONSERVATIVE: Even lower LR
+learning_rate = float(os.getenv('FL_LEARNING_RATE', 0.001))  # Base LR for progressive training
 local_epochs = int(os.getenv('FL_LOCAL_EPOCHS', 2))  # EMERGENCY FIX: Reduced epochs
 proximal_mu = float(os.getenv('FL_PROXIMAL_MU', 0.5))  # EMERGENCY FIX: Strong regularization
 
@@ -33,7 +33,7 @@ cache_cleanup_interval = int(os.getenv('FL_CACHE_CLEANUP_INTERVAL', 10))
 
 # Data Configuration
 train_test_split = float(os.getenv('FL_TRAIN_TEST_SPLIT', 0.8))
-image_size = int(os.getenv('FL_IMAGE_SIZE', 64))  # Reduced from 128 for memory
+image_size = int(os.getenv('FL_IMAGE_SIZE', 96))  # Increased for better PlantVillage performance
 
 # Non-IID Enhancement Configuration
 class_imbalance_ratio = float(os.getenv('FL_CLASS_IMBALANCE_RATIO', 0.7))  # Introduce class imbalance
