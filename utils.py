@@ -17,18 +17,11 @@ PROCESSED_DATA_DIR = "./processed_dataset"
 
 
 def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
-    # Memory-efficient: Check existence more thoroughly
     if os.path.exists(PROCESSED_DATA_DIR):
-        try:
-            train_dir = os.path.join(PROCESSED_DATA_DIR, "train")
-            test_dir = os.path.join(PROCESSED_DATA_DIR, "test")
-            if os.path.exists(train_dir) and os.path.exists(test_dir):
-                client_dirs = [d for d in os.listdir(train_dir) if d.startswith("client_")]
-                if len(client_dirs) >= num_clients:
-                    print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
-                    return
-        except Exception as e:
-            print(f"Error checking existing data: {e}, regenerating...")
+        client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
+        if len(client_dirs) >= 1:
+            print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
+            return
 
     dataset = ImageFolder(root=DATA_DIR)
     total_samples = len(dataset.samples)
@@ -51,18 +44,8 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
         proportions = np.random.dirichlet([alpha] * num_clients)
         proportions = (proportions * len(indices)).astype(int)
 
-        # Fix: Ensure proper distribution of remaining indices
-        remaining = len(indices) - proportions.sum()
-        if remaining > 0:
-            # Distribute remaining indices to clients with largest proportions
-            for _ in range(remaining):
-                proportions[np.argmax(proportions)] += 1
-        elif remaining < 0:
-            # Remove excess indices from clients with smallest non-zero proportions
-            for _ in range(-remaining):
-                non_zero_idx = np.where(proportions > 0)[0]
-                if len(non_zero_idx) > 0:
-                    proportions[non_zero_idx[np.argmin(proportions[non_zero_idx])]] -= 1
+        while proportions.sum() < len(indices):
+            proportions[np.argmax(proportions)] += 1
 
         start = 0
         for client_id, count in enumerate(proportions):
@@ -76,9 +59,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
     
-    # Use configurable image size for memory efficiency
-    from config import image_size
-    transform = transforms.Resize((image_size, image_size))
+    transform = transforms.Resize((128, 128))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
@@ -94,22 +75,13 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 
         def save_images(subset, base_dir):
             for idx in subset:
-                try:
-                    path, label = dataset.samples[idx]
-                    # Error handling: Check if image file exists and is valid
-                    if not os.path.exists(path):
-                        print(f"Warning: Image not found: {path}")
-                        continue
-                    
-                    img = Image.open(path).convert("RGB")
-                    img = transform(img)
-                    class_dir = os.path.join(base_dir, f"class_{label}")
-                    os.makedirs(class_dir, exist_ok=True)
-                    filename = os.path.basename(path)
-                    img.save(os.path.join(class_dir, filename))
-                except Exception as e:
-                    print(f"Error processing image {path}: {e}")
-                    continue
+                path, label = dataset.samples[idx]
+                img = Image.open(path).convert("RGB")
+                img = transform(img)
+                class_dir = os.path.join(base_dir, f"class_{label}")
+                os.makedirs(class_dir, exist_ok=True)
+                filename = os.path.basename(path)
+                img.save(os.path.join(class_dir, filename))
 
         save_images(train_indices, os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}"))
         save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}"))
@@ -143,60 +115,21 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 
 
 def get_partitioned_data(client_id: int, num_clients: int):
-    # Memory-efficient data loading with plant disease specific augmentation
-    from config import image_size
-    from plant_disease_augmentation import PlantDiseaseAugmentation
-    
-    # MAJOR UPGRADE: Advanced PlantVillage-specific augmentation
-    from plant_disease_augmentation import PlantDiseaseAugmentation
-    
-    # Higher severity for better generalization on complex PlantVillage dataset
-    plant_augment = PlantDiseaseAugmentation(severity=0.8, enable_advanced=True)
-    
-    # Training transforms with enhanced augmentation for PlantVillage
+    # 加工済みデータのフォルダ読み込み
     train_transform = transforms.Compose([
-        transforms.Resize((image_size + 8, image_size + 8)),  # Slightly larger for random crop
-        transforms.RandomCrop(image_size),  # Random cropping
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.3),
-        transforms.RandomRotation(degrees=30),  # More aggressive rotation for plant images
-        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-        
-        # Advanced plant-specific augmentations
-        transforms.RandomApply([
-            transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1))
-        ], p=0.5),
-        
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        
-        # Random erasing to simulate occlusion/damaged parts
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.2), ratio=(0.3, 3.3))
     ])
 
-    # Test transforms (no augmentation)
     test_transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
     
-    # Error handling for missing client data
-    if not os.path.exists(train_dir) or not os.path.exists(test_dir):
-        raise FileNotFoundError(f"Client {client_id} data not found. Please run data generation first.")
-    
-    try:
-        train_dataset = ImageFolder(root=train_dir, transform=train_transform)
-        test_dataset = ImageFolder(root=test_dir, transform=test_transform)
-        
-        if len(train_dataset) == 0 or len(test_dataset) == 0:
-            raise ValueError(f"Client {client_id} has empty dataset")
-            
-        return train_dataset, test_dataset
-    except Exception as e:
-        raise RuntimeError(f"Error loading data for client {client_id}: {e}")
+    train_dataset = ImageFolder(root=train_dir, transform=train_transform)
+    test_dataset = ImageFolder(root=test_dir, transform=test_transform)
 
+    return train_dataset, test_dataset

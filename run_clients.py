@@ -1,20 +1,15 @@
 import os
 import json
-from config import num_clients, num_rounds, is_cluster, batch_size, learning_rate, local_epochs, proximal_mu, gpu_memory_fraction, lr_scheduler_step, lr_scheduler_gamma, warmup_rounds, gradient_clip_norm, weight_decay, early_stopping_patience
-from adaptive_aggregation import AdaptiveAggregation
-from smart_client_selection import SmartClientSelection
-from class_balancing import ClassBalancingLoss, FocalLoss
+from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from model import CNN
-from plant_disease_model import PlantDiseaseClassifier, ProgressiveTrainingScheduler
 import flwr as fl
 from flwr.server import ServerConfig
 import torch
 import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
-from flwr.common import Context
 
 # 結果保存ディレクトリ作成
 RESULTS_BASE_DIR = "results"
@@ -46,141 +41,73 @@ total_samples = 0
 
 # クライアントクラス定義
 class FLClient(NumPyClient):
-    def __init__(self, cid, active_cids, round_num=1):
+    def __init__(self, cid, active_cids):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # MAJOR UPGRADE: Use PlantDisease-specific model instead of simple CNN
-        self.model = PlantDiseaseClassifier(
-            num_classes=num_labels, 
-            model_type='efficientnet_b0',  # Memory-efficient pretrained model
-            pretrained=True
-        ).to(self.device)
-        
-        # Progressive training scheduler
-        self.training_scheduler = ProgressiveTrainingScheduler(total_rounds=num_rounds)
-        
-        # EMERGENCY: Use simple CrossEntropy instead of complex loss
-        # self.class_balancer = ClassBalancingLoss(num_classes=num_labels, strategy='focal')
-        # self.criterion = self.class_balancer.get_loss_function()
-        self.criterion = nn.CrossEntropyLoss()  # Back to basics
-        self.round_num = round_num
-        
-        # Adaptive learning rate with warmup and scheduling
-        self.current_lr = self._calculate_adaptive_lr(round_num)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.current_lr, 
-                                 weight_decay=weight_decay, momentum=0.9)  # Added regularization
-        
-        # Emergency performance tracking
-        self.last_loss = float('inf')
-        self.patience_counter = 0
+        self.model = CNN(num_classes=num_labels).to(self.device)
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
-            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True)
-            self.testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size)
+            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
+            self.testloader = torch.utils.data.DataLoader(testset, batch_size=32)
         else:
             self.trainloader = []
             self.testloader = []
-    
-    def _calculate_adaptive_lr(self, round_num):
-        """Calculate adaptive learning rate with warmup and decay."""
-        base_lr = learning_rate
-        
-        # EMERGENCY: Start very conservatively
-        if round_num <= 20:  # Extended conservative period
-            # Very gentle start
-            return base_lr * 0.5  # Even more conservative
-        
-        # Very gentle decay
-        if round_num > 50:
-            decay_factor = 0.95 ** ((round_num - 50) // 20)  # Slower decay
-            return base_lr * 0.5 * decay_factor
-        
-        return base_lr * 0.5
+
+    def log(self, msg):
+        colors = ["\033[94m", "\033[92m", "\033[93m", "\033[95m", "\033[91m"]
+        reset = "\033[0m"
+        color = colors[self.cid % len(colors)]
+        print(f"{color}[Client {self.cid}] {msg}{reset}")
 
     def get_parameters(self, config):
-        return [p.detach().cpu().numpy() for p in self.model.parameters()]
+        return [val.detach().cpu().numpy() for val in self.model.parameters()]
 
     def set_parameters(self, parameters):
         for p, val in zip(self.model.parameters(), parameters):
-            p.data = torch.tensor(val, dtype=torch.float32, device=self.device)
+            p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
-        if not self.trainloader:
-            return self.get_parameters(config), 0, {}
-        
-        # MAJOR UPGRADE: Progressive training with adaptive configuration
-        current_round = config.get("server_round", 1)
-        training_config = self.training_scheduler.get_training_config(current_round)
-        
-        # Apply progressive training configuration
-        self.current_lr = training_config['learning_rate']
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = self.current_lr
-        
-        # Unfreeze backbone if needed
-        if training_config['unfreeze_backbone'] and hasattr(self.model, 'unfreeze_backbone'):
-            self.model.unfreeze_backbone()
-        
-        print(f"[Client {self.cid}] Round {current_round}: LR = {self.current_lr:.6f}, "
-              f"Unfreeze: {training_config['unfreeze_backbone']}")
-        
+        print("学習開始")
         self.set_parameters(parameters)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01) 
         global_params = [p.clone().detach() for p in self.model.parameters()]
-        mu = config.get("proximal_mu", proximal_mu)
 
         self.model.train()
-        epoch_losses = []
-        
-        for epoch in range(local_epochs):
-            epoch_loss = 0.0
-            batch_count = 0
-            
+        mu = config.get("proximal_mu", 0)
+
+        for _ in range(5):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                
-                # FedProx regularization
-                if mu > 0:
-                    prox_term = sum(((param - gparam.to(self.device))**2).sum() 
-                                  for param, gparam in zip(self.model.parameters(), global_params))
-                    loss += (mu / 2) * prox_term
-                
+                prox_term = 0.0
+                for param, global_param in zip(self.model.parameters(), global_params):
+                    prox_term += ((param - global_param.to(self.device)) ** 2).sum()
+                loss += (mu / 2) * prox_term
                 loss.backward()
-                
-                # EMERGENCY: Gradient clipping to prevent explosion
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_norm)
-                
                 self.optimizer.step()
-                
-                epoch_loss += loss.item()
-                batch_count += 1
-            
-            avg_epoch_loss = epoch_loss / max(batch_count, 1)
-            epoch_losses.append(avg_epoch_loss)
-            
-            # EMERGENCY: Early stopping if loss is exploding
-            if avg_epoch_loss > 10.0:  # Emergency threshold
-                print(f"[Client {self.cid}] EMERGENCY: Loss exploding ({avg_epoch_loss:.4f}), stopping early")
-                break
-                
-        # Calculate average training loss
-        avg_train_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0.0
-        
-        print(f"[Client {self.cid}] Training complete - Avg Loss: {avg_train_loss:.4f}")
-        
-        return self.get_parameters(config), len(self.trainloader.dataset), {"train_loss": avg_train_loss}
+        self.log("Finished local training with FedProx")
+        torch.cuda.empty_cache()
+        return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
-        if not self.testloader:
-            return 0.0, 0, {"accuracy": 0.0, "loss": 0.0}
+        # evaluate関数内の最初の方に追加
+        with torch.no_grad():
+            all_labels = []
+            for _, target in self.testloader:
+                all_labels += target.tolist()
+            max_label = max(all_labels)
+            min_label = min(all_labels)
+            print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
+            assert max_label < self.model.fc2.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
         self.set_parameters(parameters)
         self.model.eval()
-        correct = 0
         total_loss = 0.0
+        correct = 0
         with torch.no_grad():
             for data, target in self.testloader:
                 data, target = data.to(self.device), target.to(self.device)
@@ -189,31 +116,17 @@ class FLClient(NumPyClient):
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
         avg_loss = total_loss / len(self.testloader.dataset)
-        acc = correct / len(self.testloader.dataset)
-        print(f"[Client {self.cid}] Evaluation → Accuracy: {acc*100:.2f}%, Loss: {avg_loss:.4f}, Samples: {len(self.testloader.dataset)}")
-        return avg_loss, len(self.testloader.dataset), {"accuracy": acc, "loss": avg_loss}
+        accuracy = correct / len(self.testloader.dataset)
+        self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
+        return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy, "loss": avg_loss}
 
-# Step 3: Memory-efficient cluster processing
-# Process clusters sequentially to avoid memory overload (GPU/Ray memory constraints)
-def process_cluster(cluster_id, client_cluster_map, num_clusters):
+# Step 3: クラスタごとのFL実行ループ
+for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
-    
-    if len(selected_cids) == 0:
-        print(f"Warning: Cluster {cluster_id} has no clients, skipping...")
-        return None
-        
-    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ({len(selected_cids)} clients) ---")
+    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
-    
-    # Memory management: Set GPU memory fraction per cluster
-    if torch.cuda.is_available():
-        torch.cuda.set_per_process_memory_fraction(gpu_memory_fraction)
-        torch.cuda.empty_cache()
 
-    # Initialize adaptive aggregation
-    adaptive_aggregator = AdaptiveAggregation(memory_efficient=True)
-    
     def aggregate_metrics(results):
         print("\n📊 このラウンドのクライアント評価結果:")
         for i, (num_examples, metrics) in enumerate(results):
@@ -221,43 +134,19 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
             loss = metrics["loss"]
             print(f"  Client {i}: Accuracy = {acc:.2f}%, Loss = {loss:.4f}, Samples = {num_examples}")
 
-        # Adaptive aggregation for better performance
-        client_metrics = [(num_examples, metrics) for num_examples, metrics in results if num_examples > 0]
-        
-        if client_metrics:
-            # Calculate adaptive weighted metrics
-            total_examples = sum(num_examples for num_examples, _ in client_metrics)
-            
-            # Performance-based weights (inverse loss weighting)
-            weights = []
-            for num_examples, metrics in client_metrics:
-                loss = metrics["loss"]
-                # Higher weight for lower loss (better performance)
-                weight = num_examples / (1.0 + loss)
-                weights.append(weight)
-            
-            # Normalize weights
-            total_weight = sum(weights)
-            weights = [w / total_weight for w in weights]
-            
-            # Adaptive weighted aggregation
-            weighted_accuracy = sum(weights[i] * metrics["accuracy"] 
-                                  for i, (_, metrics) in enumerate(client_metrics))
-            weighted_loss = sum(weights[i] * metrics["loss"] 
-                              for i, (_, metrics) in enumerate(client_metrics))
-            
-            print(f"🧠 Adaptive weighting applied - Weight distribution: {[f'{w:.3f}' for w in weights]}")
-        else:
-            weighted_accuracy = 0.0
-            weighted_loss = 1.0
-            total_examples = 0
+        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
+        total_examples = total_examples if total_examples > 0 else 1
+        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
+        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
+        avg_accuracy = weighted_accuracy / total_examples
+        avg_loss = weighted_loss / total_examples
 
-        cluster_results["accuracy"] = weighted_accuracy
-        cluster_results["loss"] = weighted_loss
+        cluster_results["accuracy"] = avg_accuracy
+        cluster_results["loss"] = avg_loss
         cluster_results["samples"] = total_examples
-        cluster_results["correct"] = weighted_accuracy * total_examples
+        cluster_results["correct"] = avg_accuracy * total_examples
 
-        print(f"➡️ Adaptive aggregated accuracy: {weighted_accuracy * 100:.2f}%\n")
+        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
         # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
         output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
@@ -265,18 +154,18 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
         summary_file = os.path.join(output_dir, "round_metrics.jsonl")
 
         round_summary = {
-            "accuracy": weighted_accuracy,
-            "loss": weighted_loss,
+            "accuracy": avg_accuracy,
+            "loss": avg_loss,
             "samples": total_examples,
-            "correct": weighted_accuracy * total_examples,
-            "aggregation_type": "adaptive"
+            "correct": avg_accuracy * total_examples,
         }
 
         with open(summary_file, "a") as f:
             json.dump(round_summary, f)
             f.write("\n")  # JSONL形式で追記
 
-        return {"accuracy": weighted_accuracy, "loss": weighted_loss}
+        return {"accuracy": avg_accuracy, "loss": avg_loss}
+
 
     strategy = fl.server.strategy.FedProx(
         fraction_fit=1.0,
@@ -284,21 +173,17 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
         min_fit_clients=len(selected_cids),
         min_available_clients=len(selected_cids),
         min_evaluate_clients=len(selected_cids),
-        proximal_mu=proximal_mu,
+        proximal_mu=0.0,
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
+
+    from flwr.common import Context
 
     client_cache = {}
 
     def client_fn(context: Context):
-        # Fix: Use partition-id directly as index for selected_cids
-        partition_id = context.node_config.get("partition-id", context.node_id)
-        idx = int(partition_id)
-        
-        # Ensure idx is within bounds
-        if idx >= len(selected_cids):
-            idx = idx % len(selected_cids)
-        
+        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
+        idx = int(cid_int)
         real_cid = selected_cids[idx]
 
         if real_cid not in client_cache:
@@ -307,13 +192,12 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
         return client_cache[real_cid]
 
 
-    # Memory-efficient simulation with reduced resources
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
         num_clients=len(selected_cids),
         config=ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
-        client_resources={"num_cpus": 1, "num_gpus": gpu_memory_fraction},  # Reduced GPU allocation
+        client_resources={"num_cpus": 1, "num_gpus": 1.0},
     )
 
     acc = cluster_results.get("accuracy", 0.0)
@@ -321,52 +205,15 @@ def process_cluster(cluster_id, client_cluster_map, num_clusters):
     examples = cluster_results.get("samples", 0)
     correct = cluster_results.get("correct", 0.0)
 
-    cluster_result = {
+    final_cluster_metrics[f"cluster_{cluster_id}"] = {
         "final_accuracy": acc,
         "final_loss": loss,
         "samples": examples,
         "correct": correct,
     }
-    
-    # Clear memory after cluster processing
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        
-    return cluster_result
 
-# Memory-efficient cross-cluster knowledge sharing
-cluster_models = {}  # Store final models from each cluster
-cluster_weights = {}  # Store cluster weights for aggregation
-
-# Execute clusters sequentially for memory efficiency
-for cluster_id in range(num_clusters):
-    result = process_cluster(cluster_id, client_cluster_map, num_clusters)
-    if result is not None:
-        final_cluster_metrics[f"cluster_{cluster_id}"] = result
-        total_correct += result["correct"]
-        total_samples += result["samples"]
-        
-        # Store cluster model and weight for cross-cluster sharing
-        # Weight by cluster size for better aggregation
-        cluster_weights[cluster_id] = result["samples"]
-
-# Simple cross-cluster knowledge sharing (optional, memory-efficient)
-if num_clusters > 1 and len(cluster_weights) > 1:
-    print("\n🔄 Implementing cross-cluster knowledge sharing...")
-    
-    # Calculate global accuracy improvement potential
-    total_weight = sum(cluster_weights.values())
-    weighted_accuracy = sum(final_cluster_metrics[f"cluster_{cid}"]["final_accuracy"] * weight 
-                          for cid, weight in cluster_weights.items()) / total_weight
-    
-    print(f"📊 Cross-cluster weighted accuracy: {weighted_accuracy*100:.2f}%")
-    
-    # Store cross-cluster metrics
-    final_cluster_metrics["cross_cluster"] = {
-        "weighted_accuracy": weighted_accuracy,
-        "num_clusters": len(cluster_weights),
-        "cluster_sizes": cluster_weights
-    }
+    total_correct += correct
+    total_samples += examples
 
 # 最終集計・保存
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
