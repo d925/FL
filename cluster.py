@@ -62,7 +62,7 @@ def determine_optimal_k(features, k_range=(2, 10)):
     best_silhouette_k = np.argmax(silhouettes) + k_range[0]
 
     # どちらか保守的な方を選ぶ
-    optimal_k = max(elbow_k, best_silhouette_k)
+    optimal_k = min(elbow_k, best_silhouette_k)
     print(f"🧠 エルボー法による k: {elbow_k}, シルエット法による k: {best_silhouette_k}, 採用 k: {optimal_k}")
     return optimal_k
 def visualize_clusters(features, cluster_ids):
