@@ -13,6 +13,36 @@ from config import num_clients
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 
+
+def extract_features(client_id, model, device):
+    dataset, _ = get_partitioned_data(client_id, num_clients)
+    loader = DataLoader(dataset, batch_size=32, shuffle=False)
+
+    features = []
+    model.eval()
+    with torch.no_grad():
+        for x, _ in loader:
+            x = x.to(device)
+            feat = model(x)
+            features.append(feat.cpu().numpy())
+
+    return np.concatenate(features, axis=0).mean(axis=0)
+
+
+def preprocess_features(features, use_pca=True, n_components=50):
+    # 標準化
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(features)
+
+    # 次元削減（任意）
+    if use_pca:
+        pca = PCA(n_components=n_components)
+        reduced = pca.fit_transform(scaled)
+        return reduced
+    else:
+        return scaled
+
+
 from sklearn.cluster import DBSCAN
 
 def determine_optimal_k(features, eps_range=np.linspace(0.1, 5.0, 50), min_samples=5):
