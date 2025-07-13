@@ -42,6 +42,23 @@ def preprocess_features(features, use_pca=True, n_components=50):
     else:
         return scaled
 
+def visualize_clusters(features, cluster_ids):
+    tsne = TSNE(n_components=2, random_state=42, perplexity=5)
+    reduced = tsne.fit_transform(features)
+
+    plt.figure(figsize=(8, 6))
+    for cluster in np.unique(cluster_ids):
+        idx = cluster_ids == cluster
+        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
+
+    plt.legend()
+    plt.title("Client Feature Clusters (t-SNE 2D Projection)")
+    plt.xlabel("TSNE Dim 1")
+    plt.ylabel("TSNE Dim 2")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
+    plt.show()
 
 from sklearn.cluster import DBSCAN
 
