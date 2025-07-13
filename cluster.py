@@ -1,3 +1,18 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from torchvision.models import resnet18
+import numpy as np
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from utils import get_partitioned_data
+from config import num_clients
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+
 from sklearn.cluster import DBSCAN
 
 def determine_optimal_k(features, eps_range=np.linspace(0.1, 5.0, 50), min_samples=5):
