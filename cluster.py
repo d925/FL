@@ -80,6 +80,7 @@ def visualize_clusters(features, cluster_ids):
     plt.ylabel("TSNE Dim 2")
     plt.grid(True)
     plt.tight_layout()
+    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
     plt.show()
 
 def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):

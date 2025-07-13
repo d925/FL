@@ -57,10 +57,7 @@ class FLClient(NumPyClient):
             self.testloader = []
 
     def log(self, msg):
-        colors = ["\033[94m", "\033[92m", "\033[93m", "\033[95m", "\033[91m"]
-        reset = "\033[0m"
-        color = colors[self.cid % len(colors)]
-        print(f"{color}[Client {self.cid}] {msg}{reset}")
+        print(f"[Client {self.cid}] {msg}")
 
     def get_parameters(self, config):
         return [val.detach().cpu().numpy() for val in self.model.parameters()]
@@ -70,40 +67,24 @@ class FLClient(NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
-        print("学習開始")
         self.set_parameters(parameters)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01) 
-        global_params = [p.clone().detach() for p in self.model.parameters()]
-
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        
         self.model.train()
-        mu = config.get("proximal_mu", 0)
-
         for _ in range(5):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                prox_term = 0.0
-                for param, global_param in zip(self.model.parameters(), global_params):
-                    prox_term += ((param - global_param.to(self.device)) ** 2).sum()
-                loss += (mu / 2) * prox_term
                 loss.backward()
                 self.optimizer.step()
-        self.log("Finished local training with FedProx")
-        torch.cuda.empty_cache()
+        self.log("Finished local training")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return self.get_parameters(config), len(self.trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
-        # evaluate関数内の最初の方に追加
-        with torch.no_grad():
-            all_labels = []
-            for _, target in self.testloader:
-                all_labels += target.tolist()
-            max_label = max(all_labels)
-            min_label = min(all_labels)
-            print(f"[DEBUG] Evaluationラベル範囲: {min_label}〜{max_label}")
-            assert max_label < self.model.fc2.out_features, f"💥 評価ラベル {max_label} が num_classes を超えてる"
         self.set_parameters(parameters)
         self.model.eval()
         total_loss = 0.0
@@ -167,13 +148,12 @@ for cluster_id in range(num_clusters):
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
 
-    strategy = fl.server.strategy.FedProx(
+    strategy = fl.server.strategy.FedAvg(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
         min_fit_clients=len(selected_cids),
         min_available_clients=len(selected_cids),
         min_evaluate_clients=len(selected_cids),
-        proximal_mu=0.0,
         evaluate_metrics_aggregation_fn=aggregate_metrics,
     )
 
