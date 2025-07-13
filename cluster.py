@@ -121,6 +121,8 @@ def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_compo
     # クラスタリング実行
     kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init='auto')
     cluster_ids = kmeans.fit_predict(processed_features)
+    score = silhouette_score(processed_features, cluster_ids)
+    print(f"🔎 シルエットスコア（k={optimal_k}）: {score:.4f}")
 
     print(f"🔍 決定されたクラスタ数: {optimal_k}")
     visualize_clusters(processed_features, np.array([cluster_ids[cid] for cid in range(num_clients)]))
