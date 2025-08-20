@@ -1,128 +1,210 @@
+import os
+import json
+from config import num_clients, num_rounds, is_cluster
+from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
+from cluster import cluster_clients
+from model import CNN
+import flwr as fl
+from flwr.server import ServerConfig
 import torch
+import torch.optim as optim
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torchvision.models import resnet18
-import numpy as np
+from flwr.client import NumPyClient
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from utils import get_partitioned_data
-from config import num_clients
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
+# 結果保存ディレクトリ作成
+RESULTS_BASE_DIR = "results"
+os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
+generate_and_save_dirichlet_partitioned_data(num_clients)
 
-def extract_features(client_id, model, device):
-    dataset, _ = get_partitioned_data(client_id, num_clients)
-    loader = DataLoader(dataset, batch_size=32, shuffle=False)
+if is_cluster:
+    # Step 2: クラスタリング実行
+    client_cluster_map = cluster_clients(num_clients=num_clients)
 
-    features = []
-    model.eval()
-    with torch.no_grad():
-        for x, _ in loader:
-            x = x.to(device)
-            feat = model(x)
-            features.append(feat.cpu().numpy())
-
-    return np.concatenate(features, axis=0).mean(axis=0)
+    print("クラスタリング結果:")
+    for cid, clust_id in client_cluster_map.items():
+        print(f"クライアント {cid} は クラスター {clust_id}")
+    
+    cluster_list = sorted(set(client_cluster_map.values()))
+    num_clusters = len(cluster_list)  # ★ クラスタ数を自動反映
+else:
+    client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
+    cluster_list = [0]
+    num_clusters = 1
 
 
-def preprocess_features(features, use_pca=True, n_components=50):
-    # 標準化
-    scaler = StandardScaler()
-    scaled = scaler.fit_transform(features)
 
-    # 次元削減（任意）
-    if use_pca:
-        pca = PCA(n_components=n_components)
-        reduced = pca.fit_transform(scaled)
-        return reduced
-    else:
-        return scaled
+# クラスタ単位の最終結果保持用
+final_cluster_metrics = {}
+total_correct = 0
+total_samples = 0
 
-def visualize_clusters(features, cluster_ids):
-    tsne = TSNE(n_components=2, random_state=42, perplexity=5)
-    reduced = tsne.fit_transform(features)
+# クライアントクラス定義
+class FLClient(NumPyClient):
+    def __init__(self, cid, active_cids):
+        self.cid = int(cid)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = CNN(num_classes=num_labels).to(self.device)
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
-    plt.figure(figsize=(8, 6))
-    for cluster in np.unique(cluster_ids):
-        idx = cluster_ids == cluster
-        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
+        if self.cid in active_cids:
+            trainset, testset = get_partitioned_data(self.cid, num_clients)
+            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
+            self.testloader = torch.utils.data.DataLoader(testset, batch_size=32)
+        else:
+            self.trainloader = []
+            self.testloader = []
 
-    plt.legend()
-    plt.title("Client Feature Clusters (t-SNE 2D Projection)")
-    plt.xlabel("TSNE Dim 1")
-    plt.ylabel("TSNE Dim 2")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
-    plt.show()
+    def log(self, msg):
+        print(f"[Client {self.cid}] {msg}")
 
-from sklearn.cluster import DBSCAN
+    def get_parameters(self, config):
+        return [val.detach().cpu().numpy() for val in self.model.parameters()]
 
-def determine_optimal_k(features, eps_range=np.linspace(0.1, 5.0, 50), min_samples=5):
-    best_eps = None
-    best_score = -1
-    for eps in eps_range:
-        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        labels = dbscan.fit_predict(features)
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        if n_clusters <= 1:
-            continue
-        score = silhouette_score(features[labels != -1], labels[labels != -1])
-        if score > best_score:
-            best_score = score
-            best_eps = eps
-    if best_eps is None:
-        print("⚠️ 有効なepsが見つかりませんでした。DBSCANクラスタリングは失敗しました。")
-        # とりあえずeps=0.5で実行させる
-        best_eps = 0.5
-        best_score = -1
-    print(f"🧠 最適なeps: {best_eps}, シルエットスコア: {best_score:.4f}")
-    return best_eps
+    def set_parameters(self, parameters):
+        for p, val in zip(self.model.parameters(), parameters):
+            p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
-def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    if feature_extractor is None:
-        from model import CNN
-        model = CNN(num_classes=128)
-        model.fc2 = nn.Identity()
-    else:
-        model = feature_extractor
-    model.to(device)
-
-    client_features = []
-    for cid in range(num_clients):
-        feat = extract_features(cid, model, device)
-        client_features.append(feat)
-        if (cid + 1) % 10 == 0:
+    def fit(self, parameters, config):
+        self.set_parameters(parameters)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        
+        self.model.train()
+        for _ in range(5):
+            for data, target in self.trainloader:
+                data, target = data.to(self.device), target.to(self.device)
+                self.optimizer.zero_grad()
+                output = self.model(data)
+                loss = self.criterion(output, target)
+                loss.backward()
+                self.optimizer.step()
+        self.log("Finished local training")
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        return self.get_parameters(config), len(self.trainloader.dataset), {}
 
-    client_features = np.vstack(client_features)
-    model.cpu()
-    torch.cuda.empty_cache()
+    def evaluate(self, parameters, config):
+        self.set_parameters(parameters)
+        self.model.eval()
+        total_loss = 0.0
+        correct = 0
+        with torch.no_grad():
+            for data, target in self.testloader:
+                data, target = data.to(self.device), target.to(self.device)
+                output = self.model(data)
+                total_loss += self.criterion(output, target).item() * data.size(0)
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+        avg_loss = total_loss / len(self.testloader.dataset)
+        accuracy = correct / len(self.testloader.dataset)
+        self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
+        return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy, "loss": avg_loss}
 
-    processed_features = preprocess_features(client_features, use_pca=use_pca, n_components=pca_components)
+# Step 3: クラスタごとのFL実行ループ
+for cluster_id in range(num_clusters):
+    selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
+    print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
-    # DBSCANのパラメータチューニング
-    best_eps = determine_optimal_k(processed_features)
+    cluster_results = {}
 
-    dbscan = DBSCAN(eps=best_eps, min_samples=5)
-    cluster_ids = dbscan.fit_predict(processed_features)
+    def aggregate_metrics(results):
+        print("\n📊 このラウンドのクライアント評価結果:")
+        for i, (num_examples, metrics) in enumerate(results):
+            acc = metrics["accuracy"] * 100
+            loss = metrics["loss"]
+            print(f"  Client {i}: Accuracy = {acc:.2f}%, Loss = {loss:.4f}, Samples = {num_examples}")
 
-    n_clusters = len(set(cluster_ids)) - (1 if -1 in cluster_ids else 0)
-    noise_points = np.sum(cluster_ids == -1)
-    print(f"🔍 クラスタ数: {n_clusters}, ノイズ点数: {noise_points}")
+        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
+        total_examples = total_examples if total_examples > 0 else 1
+        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
+        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
+        avg_accuracy = weighted_accuracy / total_examples
+        avg_loss = weighted_loss / total_examples
 
-    if n_clusters > 1:
-        score = silhouette_score(processed_features[cluster_ids != -1], cluster_ids[cluster_ids != -1])
-        print(f"🔎 シルエットスコア（DBSCAN）: {score:.4f}")
-    else:
-        print("⚠️ クラスタが1つ以下のためシルエットスコア計算不可")
+        cluster_results["accuracy"] = avg_accuracy
+        cluster_results["loss"] = avg_loss
+        cluster_results["samples"] = total_examples
+        cluster_results["correct"] = avg_accuracy * total_examples
 
-    visualize_clusters(processed_features, cluster_ids)
+        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
-    return {cid: int(cluster_ids[cid]) for cid in range(num_clients)}
+        # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
+        output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
+        os.makedirs(output_dir, exist_ok=True)
+        summary_file = os.path.join(output_dir, "round_metrics.jsonl")
+
+        round_summary = {
+            "accuracy": avg_accuracy,
+            "loss": avg_loss,
+            "samples": total_examples,
+            "correct": avg_accuracy * total_examples,
+        }
+
+        with open(summary_file, "a") as f:
+            json.dump(round_summary, f)
+            f.write("\n")  # JSONL形式で追記
+
+        return {"accuracy": avg_accuracy, "loss": avg_loss}
+
+
+    strategy = fl.server.strategy.FedAvg(
+        fraction_fit=1.0,
+        fraction_evaluate=1.0,
+        min_fit_clients=len(selected_cids),
+        min_available_clients=len(selected_cids),
+        min_evaluate_clients=len(selected_cids),
+        evaluate_metrics_aggregation_fn=aggregate_metrics,
+    )
+
+    from flwr.common import Context
+
+    client_cache = {}
+
+    def client_fn(context: Context):
+        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
+        idx = int(cid_int)
+        real_cid = selected_cids[idx]
+
+        if real_cid not in client_cache:
+            client_cache[real_cid] = FLClient(real_cid, selected_cids).to_client()
+
+        return client_cache[real_cid]
+
+
+    history = fl.simulation.start_simulation(
+        client_fn=client_fn,
+        num_clients=len(selected_cids),
+        config=ServerConfig(num_rounds=num_rounds),
+        strategy=strategy,
+        client_resources={"num_cpus": 1, "num_gpus": 1.0},
+    )
+
+    acc = cluster_results.get("accuracy", 0.0)
+    loss = cluster_results.get("loss", 0.0)
+    examples = cluster_results.get("samples", 0)
+    correct = cluster_results.get("correct", 0.0)
+
+    final_cluster_metrics[f"cluster_{cluster_id}"] = {
+        "final_accuracy": acc,
+        "final_loss": loss,
+        "samples": examples,
+        "correct": correct,
+    }
+
+    total_correct += correct
+    total_samples += examples
+
+# 最終集計・保存
+overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
+final_cluster_metrics["overall"] = {
+    "accuracy": overall_accuracy,
+    "total_correct": total_correct,
+    "total_samples": total_samples,
+}
+
+summary_path = os.path.join(RESULTS_BASE_DIR, "final_summary.json")
+with open(summary_path, "w") as f:
+    json.dump(final_cluster_metrics, f, indent=2)
+
+print(f"\n✅ 全クラスタの最終結果を {summary_path} に保存しました。")
