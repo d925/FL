@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 from utils import get_partitioned_data
 from config import num_clients
 import matplotlib.pyplot as plt
@@ -50,16 +50,27 @@ def visualize_clusters(features, cluster_ids):
     plt.show()
 
 def determine_optimal_k(features, k_range=range(2, 11)):
-    scores = []
+    best_k = None
+    best_score = -np.inf
     for k in k_range:
         kmeans = KMeans(n_clusters=k, random_state=42)
         labels = kmeans.fit_predict(features)
-        score = silhouette_score(features, labels)
-        scores.append(score)
-    best_k = k_range[np.argmax(scores)]
-    print(f"🧠 最適なクラスタ数: {best_k}, シルエットスコア: {max(scores):.4f}")
-    return best_k
 
+        sil_score = silhouette_score(features, labels)
+        ch_score = calinski_harabasz_score(features, labels)
+        db_score = davies_bouldin_score(features, labels)
+
+        # DBは小さいほど良いので反転
+        combined_score = sil_score + ch_score/1000 - db_score/10
+
+        print(f"k={k} | Sil={sil_score:.4f}, CH={ch_score:.2f}, DB={db_score:.4f}, Combined={combined_score:.4f}")
+
+        if combined_score > best_score:
+            best_score = combined_score
+            best_k = k
+
+    print(f"🧠 最適なクラスタ数: {best_k}")
+    return best_k
 def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if feature_extractor is None:

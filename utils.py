@@ -78,7 +78,8 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
                 path, label = dataset.samples[idx]
                 img = Image.open(path).convert("RGB")
                 img = transform(img)
-                class_dir = os.path.join(base_dir, f"class_{label}")
+                class_name = os.path.basename(os.path.dirname(path))  # 元のフォルダ名 (Apple___Apple_scab)
+                class_dir = os.path.join(base_dir, class_name)
                 os.makedirs(class_dir, exist_ok=True)
                 filename = os.path.basename(path)
                 img.save(os.path.join(class_dir, filename))
@@ -99,20 +100,8 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
             "num_total_labels": num_classes,
         }, f, indent=2)
-    print("\n=== フォルダに保存された画像枚数（クライアント別） ===")
-    for cid in range(num_clients):
-        train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{cid}")
-        test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{cid}")
 
-        train_count = len(glob.glob(os.path.join(train_dir, "class_*", "*")))
-        test_count = len(glob.glob(os.path.join(test_dir, "class_*", "*")))
-
-        total_count = train_count + test_count
-        print(f"Client {cid}: Train {train_count}枚, Test {test_count}枚, 合計 {total_count}枚")
-    print("=== Dirichlet-based Client Label Assignments ===")
-    for cid in range(num_clients):
-        print(f"Client {cid}: Labels {sorted(label_assignments[cid])}")
-
+    
 
 def get_partitioned_data(client_id: int, num_clients: int):
     # 加工済みデータのフォルダ読み込み
