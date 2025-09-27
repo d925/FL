@@ -2,7 +2,7 @@ import os
 import json
 from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
-from cluster_test import cluster_clients_kmeans_dual, cluster_clients_with_metadata
+from cluster_test import cluster_clients_with_metadata
 from model import CNN
 import torch
 import torch.optim as optim
