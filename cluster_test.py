@@ -215,17 +215,14 @@ def cluster_clients_with_metadata(num_clients, feature_extractor=None, use_pca=T
 
     processed_features = preprocess_features(combined_features, use_pca=use_pca, n_components=pca_components)
 
+    # エルボー法で最適kを決定
     k_elbow = determine_k_elbow(processed_features)
-    k_internal = determine_k_internal(processed_features)
 
+    # KMeansクラスタリング
     labels_elbow = KMeans(n_clusters=k_elbow, random_state=42).fit_predict(processed_features)
-    labels_internal = KMeans(n_clusters=k_internal, random_state=42).fit_predict(processed_features)
 
-    print("----- クラスタリング結果 (メタデータ込み) -----")
+    print("----- クラスタリング結果 (メタデータ込み, エルボー法) -----")
     visualize_clusters(processed_features, labels_elbow, title=f"Metadata+Elbow KMeans Clusters (k={k_elbow})")
-    visualize_clusters(processed_features, labels_internal, title=f"Metadata+Internal KMeans Clusters (k={k_internal})")
 
-    return {
-        "elbow": {cid: int(labels_elbow[cid]) for cid in range(num_clients)},
-        "internal": {cid: int(labels_internal[cid]) for cid in range(num_clients)}
-    }
+    # 返り値の形を統一（elbowだけ）
+    return {cid: int(labels_elbow[cid]) for cid in range(num_clients)}
