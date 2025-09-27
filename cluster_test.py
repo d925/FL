@@ -205,7 +205,8 @@ def cluster_clients_with_metadata(num_clients, feature_extractor=None, use_pca=T
     # メタデータ抽出
     metadata = [get_client_metadata(cid) for cid in range(num_clients)]
     encoder = OneHotEncoder(sparse_output=False)
-    metadata_encoded = encoder.fit_transform(metadata)
+    metadata_encoded = encoder.fit_transform(metadata).astype(np.float32)
+    combined_features = np.hstack([client_features, metadata_encoded])
 
     # 結合
     combined_features = np.hstack([client_features, metadata_encoded])
