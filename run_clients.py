@@ -20,9 +20,9 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 
 if is_cluster:
     # Step 2: クラスタリング実行
-    #client_cluster_map = cluster_clients(num_clients=num_clients)
+    client_cluster_map = cluster_clients(num_clients=num_clients)
     #cluster_clients_kmeans_dual(num_clients=num_clients)
-    client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
+    #client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
