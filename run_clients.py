@@ -4,6 +4,7 @@ from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from cluster_test import cluster_clients_kmeans_dual, cluster_clients_with_metadata
+from cluster_emb import cluster_clients_with_metadata_emb
 from model import CNN
 import flwr as fl
 from flwr.server import ServerConfig
@@ -22,7 +23,8 @@ if is_cluster:
     # Step 2: クラスタリング実行
     #client_cluster_map = cluster_clients(num_clients=num_clients)
     #cluster_clients_kmeans_dual(num_clients=num_clients)
-    client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
+    #client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
+    client_cluster_map = cluster_clients_with_metadata_emb(num_clients=num_clients)
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
