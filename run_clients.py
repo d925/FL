@@ -1,5 +1,8 @@
 import os
 import json
+import random
+import numpy as np
+import torch
 from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
@@ -8,10 +11,20 @@ from cluster_emb import cluster_clients_with_metadata_emb
 from model import CNN
 import flwr as fl
 from flwr.server import ServerConfig
-import torch
 import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
+
+# 乱数シード完全固定
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # 結果保存ディレクトリ作成
 RESULTS_BASE_DIR = "results"

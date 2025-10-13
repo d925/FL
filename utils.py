@@ -9,6 +9,7 @@ from config import num_labels, alpha
 from PIL import Image
 import numpy as np  # 追加
 import glob
+import random
 
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
@@ -17,12 +18,23 @@ PROCESSED_DATA_DIR = "./processed_dataset0.1ex"
 
 
 def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
+    # 乱数シード完全固定
+    SEED = 42
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(SEED)
+        torch.cuda.manual_seed_all(SEED)
+    # cudnnの再現性設定
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     if os.path.exists(PROCESSED_DATA_DIR):
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
             print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
             return
-    np.random.seed(42)
     dataset = ImageFolder(root=DATA_DIR)
     total_samples = len(dataset.samples)
     print(f"元のデータセット総数: {total_samples}")

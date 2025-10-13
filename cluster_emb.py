@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
+import random
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
@@ -10,6 +11,17 @@ from utils import get_partitioned_data
 from config import num_clients
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+
+# 乱数シード完全固定
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # -------------------------
 # 地域マッピング (PlantVillageの14作物 → アフリカ地域)
