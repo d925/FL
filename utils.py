@@ -14,7 +14,7 @@ import random
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset0.1ex"
+PROCESSED_DATA_DIR = "./processed_dataset"
 
 
 def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
