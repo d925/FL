@@ -13,7 +13,7 @@ import glob
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset"
+PROCESSED_DATA_DIR = "./processed_dataset0.1ex"
 
 
 def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
@@ -22,7 +22,7 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
         if len(client_dirs) >= 1:
             print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
             return
-
+    np.random.seed(42)
     dataset = ImageFolder(root=DATA_DIR)
     total_samples = len(dataset.samples)
     print(f"元のデータセット総数: {total_samples}")
@@ -59,7 +59,6 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
     
-    np.random.seed(42)
     transform = transforms.Resize((128, 128))
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
