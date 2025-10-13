@@ -188,6 +188,28 @@ def cluster_clients_kmeans_dual(num_clients, feature_extractor=None, use_pca=Tru
 # -------------------------
 # メタデータ込みのクラスタリング
 # -------------------------
+from sklearn.preprocessing import LabelEncoder
+
+# メタデータ埋め込みの初期化
+class MetadataEmbedding(nn.Module):
+    def __init__(self, num_crops, num_diseases, num_regions, emb_dim=8):
+        super().__init__()
+        self.crop_emb = nn.Embedding(num_crops, emb_dim)
+        self.disease_emb = nn.Embedding(num_diseases, emb_dim)
+        self.region_emb = nn.Embedding(num_regions, emb_dim)
+        # 初期化（学習しない前提なのでそのまま使用）
+        for emb in [self.crop_emb, self.disease_emb, self.region_emb]:
+            nn.init.xavier_uniform_(emb.weight)
+        for p in self.parameters():
+            p.requires_grad = False
+
+    def forward(self, crop_ids, disease_ids, region_ids):
+        crop_vec = self.crop_emb(crop_ids)
+        disease_vec = self.disease_emb(disease_ids)
+        region_vec = self.region_emb(region_ids)
+        return torch.cat([crop_vec, disease_vec, region_vec], dim=1)
+
+
 def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if feature_extractor is None:
@@ -198,32 +220,41 @@ def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, use_p
         model = feature_extractor
     model.to(device)
 
-    # 画像特徴抽出
+    # ======== 画像特徴抽出 ========
     client_features = [extract_features(cid, model, device) for cid in range(num_clients)]
     client_features = np.vstack(client_features)
 
-    # メタデータ抽出
+    # ======== メタデータ抽出 ========
     metadata = [get_client_metadata(cid) for cid in range(num_clients)]
-    encoder = OneHotEncoder(sparse_output=False)
-    metadata_encoded = encoder.fit_transform(metadata).astype(np.float32)
-    combined_features = np.hstack([client_features, metadata_encoded])
+    crops, diseases, regions = zip(*metadata)
 
-    # 結合
-    combined_features = np.hstack([client_features, metadata_encoded])
+    crop_le, disease_le, region_le = LabelEncoder(), LabelEncoder(), LabelEncoder()
+    crop_ids = torch.tensor(crop_le.fit_transform(crops), dtype=torch.long)
+    disease_ids = torch.tensor(disease_le.fit_transform(diseases), dtype=torch.long)
+    region_ids = torch.tensor(region_le.fit_transform(regions), dtype=torch.long)
+
+    emb_model = MetadataEmbedding(
+        num_crops=len(crop_le.classes_),
+        num_diseases=len(disease_le.classes_),
+        num_regions=len(region_le.classes_),
+        emb_dim=8
+    ).to(device)
+
+    with torch.no_grad():
+        metadata_emb = emb_model(crop_ids.to(device), disease_ids.to(device), region_ids.to(device)).cpu().numpy()
+
+    # ======== 結合 ========
+    combined_features = np.hstack([client_features, metadata_emb])
 
     model.cpu()
     torch.cuda.empty_cache()
 
+    # ======== 前処理・クラスタリング ========
     processed_features = preprocess_features(combined_features, use_pca=use_pca, n_components=pca_components)
-
-    # エルボー法で最適kを決定
     k_elbow = determine_k_elbow(processed_features)
-
-    # KMeansクラスタリング
     labels_elbow = KMeans(n_clusters=k_elbow, random_state=42).fit_predict(processed_features)
 
-    print("----- クラスタリング結果 (メタデータ込み, エルボー法) -----")
-    visualize_clusters(processed_features, labels_elbow, title=f"Metadata+Elbow KMeans Clusters (k={k_elbow})")
+    print("----- クラスタリング結果 (メタデータ埋め込み込み, エルボー法) -----")
+    visualize_clusters(processed_features, labels_elbow, title=f"MetadataEmb+Elbow KMeans Clusters (k={k_elbow})")
 
-    # 返り値の形を統一（elbowだけ）
     return {cid: int(labels_elbow[cid]) for cid in range(num_clients)}

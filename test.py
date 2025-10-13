@@ -3,6 +3,7 @@ import json
 from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster_test import cluster_clients_with_metadata
+from cluster_emb import cluster_clients_with_metadata_emb
 from model import CNN
 import torch
 import torch.optim as optim
@@ -17,7 +18,8 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 if is_cluster:
     # Step 2: クラスタリング実行
     #cluster_clients_kmeans_dual(num_clients=num_clients)
-    cluster_clients_with_metadata(num_clients=num_clients)
+    #cluster_clients_with_metadata(num_clients=num_clients)
+    cluster_clients_with_metadata_emb(num_clients=num_clients)
 else:
     client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
     cluster_list = [0]
