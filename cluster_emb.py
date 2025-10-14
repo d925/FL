@@ -13,6 +13,7 @@ from utils import get_partitioned_data
 from config import num_clients
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+from collections import defaultdict
 
 # ============================================================
 # 乱数シード固定
@@ -143,106 +144,99 @@ def determine_k_internal(features, k_range=range(2, 11)):
 # ============================================================
 # メタデータ埋め込みクラス
 # ============================================================
-class MetadataEmbedding(nn.Module):
-    def __init__(self, num_crops, num_diseases, num_regions, emb_dim=32):
-        super().__init__()
-        self.crop_emb = nn.Embedding(num_crops, emb_dim)
-        self.disease_emb = nn.Embedding(num_diseases, emb_dim)
-        self.region_emb = nn.Embedding(num_regions, emb_dim)
-
-        # Xavier初期化（trainableにするためfreeze削除）
-        for emb in [self.crop_emb, self.disease_emb, self.region_emb]:
-            nn.init.xavier_uniform_(emb.weight)
-
-    def forward(self, crop_ids, disease_ids, region_ids):
-        crop_vec = self.crop_emb(crop_ids)
-        disease_vec = self.disease_emb(disease_ids)
-        region_vec = self.region_emb(region_ids)
-        return torch.cat([crop_vec, disease_vec, region_vec], dim=1)
-
 # ============================================================
-# 画像特徴 + メタデータ埋め込みクラスタリング
+# 比率ベクトルを用いたメタデータ + 画像特徴クラスタリング
 # ============================================================
-def get_client_metadata_distribution(client_id, num_clients, crop_region_map):
-    dataset, _ = get_partitioned_data(client_id, num_clients)
-    labels = [y for _, y in dataset]
-    class_names = dataset.classes
+def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, metadata_weight=None):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    crops, diseases = [], []
-    for label in labels:
-        label_str = class_names[label]
-        if "___" in label_str:
-            crop, disease = label_str.split("___")
-        else:
-            crop, disease = label_str, "Unknown"
-        crops.append(crop)
-        diseases.append(disease)
+    if feature_extractor is None:
+        from model import CNN
+        model = CNN(num_classes=38)
+        model.fc2 = nn.Identity()
+    else:
+        model = feature_extractor
+    model.to(device)
 
-    # 頻度分布を確率化
-    def normalize(counter):
-        total = sum(counter.values())
-        return {k: v / total for k, v in counter.items()}
+    # ---- 各クライアントの画像特徴抽出 ----
+    client_features = []
+    for cid in range(num_clients):
+        feat = extract_features(cid, model, device)
+        client_features.append(feat)
+    client_features = np.vstack(client_features)
 
-    crop_dist = normalize(Counter(crops))
-    disease_dist = normalize(Counter(diseases))
-    region_dist = normalize(Counter([crop_region_map.get(c, "Unknown") for c in crops]))
+    # ---- 各クライアントのメタデータ比率ベクトル作成 ----
+    all_crops, all_diseases = set(), set()
+    client_label_stats = []
 
-    return crop_dist, disease_dist, region_dist
+    # 各クライアントごとのデータ構成集計
+    for cid in range(num_clients):
+        dataset, _ = get_partitioned_data(cid, num_clients)
+        class_names = dataset.classes
+        label_counts = defaultdict(int)
+        for _, label in dataset:
+            label_counts[class_names[label]] += 1
+        client_label_stats.append(label_counts)
+        for cname in class_names:
+            if "___" in cname:
+                crop, disease = cname.split("___")
+            else:
+                crop, disease = cname, "Unknown"
+            all_crops.add(crop)
+            all_diseases.add(disease)
 
+    crop_list = sorted(list(all_crops))
+    disease_list = sorted(list(all_diseases))
 
-# ============================================================
-# メタデータ分布＋画像特徴のマルチモーダルクラスタリング
-# ============================================================
-def cluster_clients_with_metadata_emb(model, device, num_clients, crop_region_map):
-    print("=== Clustering clients using image features + metadata distributions ===")
+    def compute_ratio_vector(stats, crop_list, disease_list):
+        crop_counts = defaultdict(int)
+        disease_counts = defaultdict(int)
+        total = sum(stats.values())
+        for cname, count in stats.items():
+            if "___" in cname:
+                crop, disease = cname.split("___")
+            else:
+                crop, disease = cname, "Unknown"
+            crop_counts[crop] += count
+            disease_counts[disease] += count
+        crop_ratio = np.array([crop_counts[c] / total for c in crop_list])
+        disease_ratio = np.array([disease_counts[d] / total for d in disease_list])
+        return np.concatenate([crop_ratio, disease_ratio])
 
-    # ---- クライアントごとの分布取得 ----
-    metadata = [
-        get_client_metadata_distribution(cid, num_clients, crop_region_map)
-        for cid in range(num_clients)
-    ]
-
-    # 全クライアントで出現したcrop/disease/regionをキー集合として抽出
-    all_crops = sorted(list({c for dist, _, _ in metadata for c in dist.keys()}))
-    all_diseases = sorted(list({d for _, dist, _ in metadata for d in dist.keys()}))
-    all_regions = sorted(list({r for _, _, dist in metadata for r in dist.keys()}))
-
-    # ---- 各分布を固定順でベクトル化 ----
-    def vectorize(dist, keys):
-        return np.array([dist.get(k, 0.0) for k in keys])
-
-    crop_vecs = np.vstack([vectorize(c, all_crops) for c, _, _ in metadata])
-    disease_vecs = np.vstack([vectorize(d, all_diseases) for _, d, _ in metadata])
-    region_vecs = np.vstack([vectorize(r, all_regions) for _, _, r in metadata])
-
-    metadata_vecs = np.hstack([crop_vecs, disease_vecs, region_vecs])
-
-    # ---- 画像特徴を抽出 ----
-    client_features = np.vstack([
-        extract_features(cid, model, device) for cid in range(num_clients)
+    metadata_ratios = np.vstack([
+        compute_ratio_vector(stats, crop_list, disease_list)
+        for stats in client_label_stats
     ])
 
-    # ---- スケール調整（画像とメタデータをバランスさせる） ----
+    # ---- 比率ベクトルと画像特徴の重み付け統合 ----
     img_var = np.var(client_features)
-    meta_var = np.var(metadata_vecs)
-    metadata_weight = np.sqrt(img_var / (meta_var + 1e-8))
-    combined_features = np.hstack([client_features, metadata_vecs * metadata_weight])
+    meta_var = np.var(metadata_ratios)
+    if metadata_weight is None:
+        metadata_weight = np.sqrt(img_var / (meta_var + 1e-8))
+        print(f"[Auto] metadata_weight = {metadata_weight:.3f}")
 
-    # ---- 正規化とクラスタリング ----
+    combined_features = np.hstack([client_features, metadata_ratios * metadata_weight])
+
+    # ---- 正規化 ----
     scaler = StandardScaler()
     processed_features = scaler.fit_transform(combined_features)
 
+    # ---- 最適クラスタ数を探索 ----
     k_opt = determine_k_internal(processed_features)
-    kmeans = KMeans(n_clusters=k_opt, random_state=42, n_init=20)
-    labels = kmeans.fit_predict(processed_features)
+    labels = KMeans(n_clusters=k_opt, random_state=42, n_init=20).fit_predict(processed_features)
+    sil, ch, db = evaluate_clusters(processed_features, labels, "Image + MetadataRatio Clustering")
 
-    # ---- 内部指標を計算 ----
-    sil, ch, db = evaluate_clusters(processed_features, labels, "Image+MetadataDist Clustering")
+    # ---- 結果保存 ----
+    os.makedirs("results", exist_ok=True)
+    metrics_path = os.path.join("results", "cluster_metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump({
+            "silhouette": sil,
+            "calinski_harabasz": ch,
+            "davies_bouldin": db,
+            "k_opt": int(k_opt)
+        }, f, indent=2)
+    print(f"📁 内部指標を {metrics_path} に保存しました。")
 
-    # ---- 結果出力 ----
-    print(f"[Cluster Summary]  k={k_opt}")
-    print(f"  Silhouette: {sil:.4f}")
-    print(f"  Calinski-Harabasz: {ch:.4f}")
-    print(f"  Davies-Bouldin: {db:.4f}")
-
-    return labels, k_opt, {"silhouette": sil, "calinski_harabasz": ch, "davies_bouldin": db}
+    visualize_clusters(processed_features, labels, title=f"Image+MetadataRatio Clusters (k={k_opt})")
+    return {cid: int(labels[cid]) for cid in range(num_clients)}
