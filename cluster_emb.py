@@ -222,7 +222,7 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, met
     processed_features = scaler.fit_transform(combined_features)
 
     # ---- 最適クラスタ数を探索 ----
-    k_opt = determine_k_internal(processed_features)
+    k_opt = 4
     labels = KMeans(n_clusters=k_opt, random_state=42, n_init=20).fit_predict(processed_features)
     sil, ch, db = evaluate_clusters(processed_features, labels, "Image + MetadataRatio Clustering")
 
