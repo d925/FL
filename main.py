@@ -5,9 +5,7 @@ import numpy as np
 import torch
 from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
-from cluster import cluster_clients
-from cluster_test import cluster_clients_kmeans_dual, cluster_clients_with_metadata
-from cluster_emb import cluster_clients_with_metadata_emb, get_client_metadata, MetadataEmbedding
+from cluster_emb import cluster_clients_with_metadata_emb, get_client_metadata
 from model_combined import CNNWithMetadata
 import flwr as fl
 from flwr.server import ServerConfig
@@ -52,16 +50,26 @@ region_le.fit(regions)
 # ============================================================
 # クラスタリング
 # ============================================================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from model import CNN  # 特徴抽出用ベースモデル
+feature_extractor = CNN(num_classes=num_labels)
+feature_extractor.fc2 = nn.Identity()
+feature_extractor.to(device)
+
 if is_cluster:
-    client_cluster_map = cluster_clients_with_metadata_emb(num_clients=num_clients)
+    client_cluster_map = cluster_clients_with_metadata_emb(
+        model=feature_extractor,
+        device=device,
+        num_clients=num_clients
+    )
     print("クラスタリング結果:")
-    for cid, clust_id in client_cluster_map.items():
+    for cid, clust_id in enumerate(client_cluster_map):
         print(f"クライアント {cid} は クラスター {clust_id}")
-    
-    cluster_list = sorted(set(client_cluster_map.values()))
+
+    cluster_list = sorted(set(client_cluster_map))
     num_clusters = len(cluster_list)
 else:
-    client_cluster_map = {cid: 0 for cid in range(num_clients)}
+    client_cluster_map = [0 for _ in range(num_clients)]
     cluster_list = [0]
     num_clusters = 1
 
@@ -80,7 +88,6 @@ class FLClient(NumPyClient):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # ---- データセット ----
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
             self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
@@ -88,13 +95,13 @@ class FLClient(NumPyClient):
         else:
             self.trainloader, self.testloader = [], []
 
-        # ---- メタデータ ----
-        crop, disease, region = get_client_metadata(cid)
-        self.crop_id = torch.tensor([crop_le.transform([crop])[0]], dtype=torch.long).to(self.device)
-        self.disease_id = torch.tensor([disease_le.transform([disease])[0]], dtype=torch.long).to(self.device)
-        self.region_id = torch.tensor([region_le.transform([region])[0]], dtype=torch.long).to(self.device)
+        # クライアントのcrop分布ベクトルを取得
+        from cluster_emb import get_client_metadata_distribution
+        crop_dist, _, _ = get_client_metadata_distribution(cid, num_clients, None)
+        # crop分布ベクトルを固定順で作成
+        all_crops = sorted(list(crop_le.classes_))
+        self.crop_vec = torch.tensor([crop_dist.get(c, 0.0) for c in all_crops], dtype=torch.float32).to(self.device)
 
-        # ---- モデル定義 ----
         self.model = CNNWithMetadata(
             num_classes=num_labels,
             num_crops=len(crop_le.classes_),
@@ -103,11 +110,7 @@ class FLClient(NumPyClient):
         ).to(self.device)
 
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(
-            self.model.parameters(),
-            lr=0.01,
-            momentum=0.9
-        )
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
 
     def log(self, msg):
         print(f"[Client {self.cid}] {msg}")
@@ -130,18 +133,13 @@ class FLClient(NumPyClient):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
-                output = self.model(
-                    data,
-                    self.crop_id.repeat(data.size(0)),
-                    self.disease_id.repeat(data.size(0)),
-                    self.region_id.repeat(data.size(0))
-                )
+                crop_vec_batch = self.crop_vec.unsqueeze(0).repeat(data.size(0), 1)
+                output = self.model(data, crop_vec_batch)
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
                 running_loss += loss.item()
             scheduler.step()
-
             if abs(prev_loss - running_loss) < 1e-3:
                 break
             prev_loss = running_loss
@@ -159,12 +157,8 @@ class FLClient(NumPyClient):
         with torch.no_grad():
             for data, target in self.testloader:
                 data, target = data.to(self.device), target.to(self.device)
-                output = self.model(
-                    data,
-                    self.crop_id.repeat(data.size(0)),
-                    self.disease_id.repeat(data.size(0)),
-                    self.region_id.repeat(data.size(0))
-                )
+                crop_vec_batch = self.crop_vec.unsqueeze(0).repeat(data.size(0), 1)
+                output = self.model(data, crop_vec_batch)
                 total_loss += self.criterion(output, target).item() * data.size(0)
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
@@ -177,16 +171,14 @@ class FLClient(NumPyClient):
 # クラスタごとのFL実行
 # ============================================================
 for cluster_id in range(num_clusters):
-    selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
+    selected_cids = [cid for cid, clid in enumerate(client_cluster_map) if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
 
     def aggregate_metrics(results):
-        print("\n📊 このラウンドのクライアント評価結果:")
         weighted_sum_acc, weighted_sum_loss, total_weight = 0.0, 0.0, 0.0
         total_examples = 0
-
         for i, (num_examples, metrics) in enumerate(results):
             acc = metrics["accuracy"]
             loss = metrics["loss"]
@@ -195,8 +187,6 @@ for cluster_id in range(num_clusters):
             weighted_sum_loss += loss * weight
             total_weight += weight
             total_examples += num_examples
-            print(f"  Client {i}: Acc={acc*100:.2f}%, Loss={loss:.4f}, Samples={num_examples}")
-
         avg_accuracy = weighted_sum_acc / total_weight
         avg_loss = weighted_sum_loss / total_weight
 
@@ -204,24 +194,6 @@ for cluster_id in range(num_clusters):
         cluster_results["loss"] = avg_loss
         cluster_results["samples"] = total_examples
         cluster_results["correct"] = avg_accuracy * total_examples
-
-        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
-
-        output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
-        os.makedirs(output_dir, exist_ok=True)
-        summary_file = os.path.join(output_dir, "round_metrics.jsonl")
-
-        round_summary = {
-            "accuracy": avg_accuracy,
-            "loss": avg_loss,
-            "samples": total_examples,
-            "correct": avg_accuracy * total_examples,
-        }
-
-        with open(summary_file, "a") as f:
-            json.dump(round_summary, f)
-            f.write("\n")
-
         return {"accuracy": avg_accuracy, "loss": avg_loss}
 
     strategy = fl.server.strategy.FedAvg(
@@ -234,7 +206,6 @@ for cluster_id in range(num_clusters):
     )
 
     from flwr.common import Context
-
     client_cache = {}
 
     def client_fn(context: Context):
