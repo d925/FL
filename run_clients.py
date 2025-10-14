@@ -85,10 +85,13 @@ class FLClient(NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.8)
         
         self.model.train()
-        for _ in range(5):
+        prev_loss = float('inf')
+        for epoch in range(5):
+            running_loss = 0.0
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
@@ -96,7 +99,15 @@ class FLClient(NumPyClient):
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
-        self.log("Finished local training")
+                running_loss += loss.item()
+            scheduler.step()
+
+            # Early stop-like挙動
+            if abs(prev_loss - running_loss) < 1e-3:
+                break
+            prev_loss = running_loss
+
+        self.log(f"Finished local training (final loss={prev_loss:.4f})")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return self.get_parameters(config), len(self.trainloader.dataset), {}
@@ -127,17 +138,21 @@ for cluster_id in range(num_clusters):
 
     def aggregate_metrics(results):
         print("\n📊 このラウンドのクライアント評価結果:")
-        for i, (num_examples, metrics) in enumerate(results):
-            acc = metrics["accuracy"] * 100
-            loss = metrics["loss"]
-            print(f"  Client {i}: Accuracy = {acc:.2f}%, Loss = {loss:.4f}, Samples = {num_examples}")
+        weighted_sum_acc, weighted_sum_loss, total_weight = 0.0, 0.0, 0.0
+        total_examples = 0
 
-        total_examples = sum(num_examples for num_examples, _ in results if num_examples > 0)
-        total_examples = total_examples if total_examples > 0 else 1
-        weighted_accuracy = sum(metrics["accuracy"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        weighted_loss = sum(metrics["loss"] * num_examples for num_examples, metrics in results if num_examples > 0)
-        avg_accuracy = weighted_accuracy / total_examples
-        avg_loss = weighted_loss / total_examples
+        for i, (num_examples, metrics) in enumerate(results):
+            acc = metrics["accuracy"]
+            loss = metrics["loss"]
+            weight = num_examples / (loss + 1e-6)  # 低lossクライアントを強調
+            weighted_sum_acc += acc * weight
+            weighted_sum_loss += loss * weight
+            total_weight += weight
+            total_examples += num_examples
+            print(f"  Client {i}: Acc={acc*100:.2f}%, Loss={loss:.4f}, Samples={num_examples}")
+
+        avg_accuracy = weighted_sum_acc / total_weight
+        avg_loss = weighted_sum_loss / total_weight
 
         cluster_results["accuracy"] = avg_accuracy
         cluster_results["loss"] = avg_loss

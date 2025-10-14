@@ -178,7 +178,7 @@ class MetadataEmbedding(nn.Module):
 # ============================================================
 # 画像特徴 + メタデータ埋め込みクラスタリング
 # ============================================================
-def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, metadata_weight=3.0):
+def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, metadata_weight=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if feature_extractor is None:
@@ -211,18 +211,25 @@ def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, metad
     with torch.no_grad():
         metadata_emb = emb_model(crop_ids.to(device), disease_ids.to(device), region_ids.to(device)).cpu().numpy()
 
-    # ---- 特徴結合（重み付き）----
+    # ---- 自動重み調整 ----
+    # 特徴ごとの分散比に応じて metadata_weight を自動算出
+    img_var = np.var(client_features)
+    meta_var = np.var(metadata_emb)
+    if metadata_weight is None:
+        metadata_weight = np.sqrt(img_var / (meta_var + 1e-8))
+        print(f"[Auto] metadata_weight = {metadata_weight:.3f}")
+
     combined_features = np.hstack([client_features, metadata_emb * metadata_weight])
 
-    model.cpu()
-    torch.cuda.empty_cache()
-
-    # ---- 前処理（PCAなし）----
-    processed_features = preprocess_features(combined_features)
+    # ---- 二段階正規化 ----
+    scaler1 = StandardScaler()
+    inter_scaled = scaler1.fit_transform(combined_features)
+    scaler2 = StandardScaler(with_std=False)
+    processed_features = scaler2.fit_transform(inter_scaled)
 
     # ---- クラスタリング ----
     k_opt = determine_k_internal(processed_features)
-    labels = KMeans(n_clusters=k_opt, random_state=42).fit_predict(processed_features)
+    labels = KMeans(n_clusters=k_opt, random_state=42, n_init=20).fit_predict(processed_features)
 
     print("----- クラスタリング結果 (メタデータ埋め込み + 画像特徴) -----")
     evaluate_clusters(processed_features, labels, "Metadata+Image Clustering")
