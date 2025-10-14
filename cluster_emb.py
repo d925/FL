@@ -1,3 +1,5 @@
+import json
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -163,11 +165,9 @@ class MetadataEmbedding(nn.Module):
         self.disease_emb = nn.Embedding(num_diseases, emb_dim)
         self.region_emb = nn.Embedding(num_regions, emb_dim)
 
-        # Xavier初期化 + 凍結
+        # Xavier初期化（trainableにするためfreeze削除）
         for emb in [self.crop_emb, self.disease_emb, self.region_emb]:
             nn.init.xavier_uniform_(emb.weight)
-        for p in self.parameters():
-            p.requires_grad = False
 
     def forward(self, crop_ids, disease_ids, region_ids):
         crop_vec = self.crop_emb(crop_ids)
@@ -230,9 +230,20 @@ def cluster_clients_with_metadata_emb(num_clients, feature_extractor=None, metad
     # ---- クラスタリング ----
     k_opt = determine_k_internal(processed_features)
     labels = KMeans(n_clusters=k_opt, random_state=42, n_init=20).fit_predict(processed_features)
+    labels = KMeans(n_clusters=k_opt, random_state=42, n_init=20).fit_predict(processed_features)
+    sil, ch, db = evaluate_clusters(processed_features, labels, "Metadata+Image Clustering")
 
-    print("----- クラスタリング結果 (メタデータ埋め込み + 画像特徴) -----")
-    evaluate_clusters(processed_features, labels, "Metadata+Image Clustering")
+    # ---- 追加：内部指標を保存 ----
+    os.makedirs("results", exist_ok=True)
+    metrics_path = os.path.join("results", "cluster_metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump({
+            "silhouette": sil,
+            "calinski_harabasz": ch,
+            "davies_bouldin": db,
+            "k_opt": int(k_opt)
+        }, f, indent=2)
+    print(f"📁 クラスタリング内部指標を {metrics_path} に保存しました。")
+
     visualize_clusters(processed_features, labels, title=f"MetadataEmb KMeans Clusters (k={k_opt})")
-
     return {cid: int(labels[cid]) for cid in range(num_clients)}
