@@ -7,25 +7,18 @@ from config import num_clients, num_rounds, is_cluster
 from utils import generate_and_save_dirichlet_partitioned_data, get_partitioned_data, num_labels
 from cluster import cluster_clients
 from cluster_test import cluster_clients_kmeans_dual, cluster_clients_with_metadata
-from cluster_emb import cluster_clients_with_metadata_emb
-from model import CNN
+from cluster_emb import cluster_clients_with_metadata_emb, get_client_metadata, MetadataEmbedding
+from model_combined import CNNWithMetadata
 import flwr as fl
 from flwr.server import ServerConfig
 import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
-from model_combined import CNNWithMetadata
-from cluster_emb import MetadataEmbedding
 from sklearn.preprocessing import LabelEncoder
 
-# 事前にエンコーダを共通化して保存しておく
-crop_le, disease_le, region_le = LabelEncoder(), LabelEncoder(), LabelEncoder()
-crops, diseases, regions = zip(*[get_client_metadata(cid) for cid in range(num_clients)])
-crop_le.fit(crops)
-disease_le.fit(diseases)
-region_le.fit(regions)
-
+# ============================================================
 # 乱数シード完全固定
+# ============================================================
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
@@ -36,48 +29,72 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# 結果保存ディレクトリ作成
+# ============================================================
+# ディレクトリ作成
+# ============================================================
 RESULTS_BASE_DIR = "results"
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
+# ============================================================
+# データ生成（Dirichlet分割）
+# ============================================================
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
+# ============================================================
+# メタデータエンコーダ初期化
+# ============================================================
+crops, diseases, regions = zip(*[get_client_metadata(cid) for cid in range(num_clients)])
+crop_le, disease_le, region_le = LabelEncoder(), LabelEncoder(), LabelEncoder()
+crop_le.fit(crops)
+disease_le.fit(diseases)
+region_le.fit(regions)
+
+# ============================================================
+# クラスタリング
+# ============================================================
 if is_cluster:
-    # Step 2: クラスタリング実行
-    #client_cluster_map = cluster_clients(num_clients=num_clients)
-    #cluster_clients_kmeans_dual(num_clients=num_clients)
-    #client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
     client_cluster_map = cluster_clients_with_metadata_emb(num_clients=num_clients)
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
     
     cluster_list = sorted(set(client_cluster_map.values()))
-    num_clusters = len(cluster_list)  # ★ クラスタ数を自動反映
+    num_clusters = len(cluster_list)
 else:
-    client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
+    client_cluster_map = {cid: 0 for cid in range(num_clients)}
     cluster_list = [0]
     num_clusters = 1
 
-
-
+# ============================================================
 # クラスタ単位の最終結果保持用
+# ============================================================
 final_cluster_metrics = {}
 total_correct = 0
 total_samples = 0
 
-# クライアントクラス定義
+# ============================================================
+# クライアント定義
+# ============================================================
 class FLClient(NumPyClient):
     def __init__(self, cid, active_cids):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # メタデータIDを固定化してモデルに渡す
+        # ---- データセット ----
+        if self.cid in active_cids:
+            trainset, testset = get_partitioned_data(self.cid, num_clients)
+            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
+            self.testloader = torch.utils.data.DataLoader(testset, batch_size=32)
+        else:
+            self.trainloader, self.testloader = [], []
+
+        # ---- メタデータ ----
         crop, disease, region = get_client_metadata(cid)
         self.crop_id = torch.tensor([crop_le.transform([crop])[0]], dtype=torch.long).to(self.device)
         self.disease_id = torch.tensor([disease_le.transform([disease])[0]], dtype=torch.long).to(self.device)
         self.region_id = torch.tensor([region_le.transform([region])[0]], dtype=torch.long).to(self.device)
 
+        # ---- モデル定義 ----
         self.model = CNNWithMetadata(
             num_classes=num_labels,
             num_crops=len(crop_le.classes_),
@@ -87,7 +104,7 @@ class FLClient(NumPyClient):
 
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(
-            list(self.model.cnn.parameters()) + list(self.model.metadata_emb.parameters()) + list(self.model.fc_fusion.parameters()),
+            self.model.parameters(),
             lr=0.01,
             momentum=0.9
         )
@@ -104,9 +121,8 @@ class FLClient(NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
         scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.8)
-        
+
         self.model.train()
         prev_loss = float('inf')
         for epoch in range(5):
@@ -114,14 +130,18 @@ class FLClient(NumPyClient):
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
-                output = self.model(data, self.crop_id.repeat(data.size(0)), self.disease_id.repeat(data.size(0)), self.region_id.repeat(data.size(0)))
+                output = self.model(
+                    data,
+                    self.crop_id.repeat(data.size(0)),
+                    self.disease_id.repeat(data.size(0)),
+                    self.region_id.repeat(data.size(0))
+                )
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
                 running_loss += loss.item()
             scheduler.step()
 
-            # Early stop-like挙動
             if abs(prev_loss - running_loss) < 1e-3:
                 break
             prev_loss = running_loss
@@ -139,7 +159,12 @@ class FLClient(NumPyClient):
         with torch.no_grad():
             for data, target in self.testloader:
                 data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data, self.crop_id.repeat(data.size(0)), self.disease_id.repeat(data.size(0)), self.region_id.repeat(data.size(0)))
+                output = self.model(
+                    data,
+                    self.crop_id.repeat(data.size(0)),
+                    self.disease_id.repeat(data.size(0)),
+                    self.region_id.repeat(data.size(0))
+                )
                 total_loss += self.criterion(output, target).item() * data.size(0)
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
@@ -148,7 +173,9 @@ class FLClient(NumPyClient):
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
         return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy, "loss": avg_loss}
 
-# Step 3: クラスタごとのFL実行ループ
+# ============================================================
+# クラスタごとのFL実行
+# ============================================================
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
@@ -163,7 +190,7 @@ for cluster_id in range(num_clusters):
         for i, (num_examples, metrics) in enumerate(results):
             acc = metrics["accuracy"]
             loss = metrics["loss"]
-            weight = num_examples / (loss + 1e-6)  # 低lossクライアントを強調
+            weight = num_examples / (loss + 1e-6)
             weighted_sum_acc += acc * weight
             weighted_sum_loss += loss * weight
             total_weight += weight
@@ -180,7 +207,6 @@ for cluster_id in range(num_clusters):
 
         print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
-        # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
         output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
         os.makedirs(output_dir, exist_ok=True)
         summary_file = os.path.join(output_dir, "round_metrics.jsonl")
@@ -194,10 +220,9 @@ for cluster_id in range(num_clusters):
 
         with open(summary_file, "a") as f:
             json.dump(round_summary, f)
-            f.write("\n")  # JSONL形式で追記
+            f.write("\n")
 
         return {"accuracy": avg_accuracy, "loss": avg_loss}
-
 
     strategy = fl.server.strategy.FedAvg(
         fraction_fit=1.0,
@@ -213,15 +238,12 @@ for cluster_id in range(num_clusters):
     client_cache = {}
 
     def client_fn(context: Context):
-        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
+        cid_int = context.node_config.get("partition-id", context.node_id)
         idx = int(cid_int)
         real_cid = selected_cids[idx]
-
         if real_cid not in client_cache:
             client_cache[real_cid] = FLClient(real_cid, selected_cids).to_client()
-
         return client_cache[real_cid]
-
 
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
@@ -246,7 +268,9 @@ for cluster_id in range(num_clusters):
     total_correct += correct
     total_samples += examples
 
-# 最終集計・保存
+# ============================================================
+# 最終集計
+# ============================================================
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
 final_cluster_metrics["overall"] = {
     "accuracy": overall_accuracy,
