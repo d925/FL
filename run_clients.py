@@ -90,7 +90,7 @@ class FLClient(NumPyClient):
         
         self.model.train()
         prev_loss = float('inf')
-        for epoch in range(5):
+        for epoch in range(1):
             running_loss = 0.0
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
