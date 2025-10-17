@@ -154,7 +154,7 @@ def cluster_clients_with_metadata_ratio(
     num_clients,
     feature_extractor=None,
     metadata_weight=None,
-    method="concat",            # "concat" または "distance"
+    method="distance",            # "concat" または "distance"
     k_range=range(2, 7),        # 探索するクラスタ数範囲
     alpha_grid=None,            # 距離融合のとき探索する alpha 値リスト (画像重み)
     random_state=42
