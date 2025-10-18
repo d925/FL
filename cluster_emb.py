@@ -58,7 +58,7 @@ torch.backends.cudnn.benchmark = False
 # ============================================================
 def extract_features(client_id, model, device):
     """クライアント単位で特徴を抽出"""
-    dataset, _ = get_partitioned_data(client_id, params['num_clients'])
+    dataset, _ = get_partitioned_data(client_id, num_clients)
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
     features = []
     model.eval()
