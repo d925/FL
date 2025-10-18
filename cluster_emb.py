@@ -20,13 +20,22 @@ from config import num_clients
 # ============================================================
 # ================== パラメータ設定 =========================
 params = {
-    'metadata_weight': None,         # Noneで自動計算
-    'method': 'distance',            # 'concat' / 'distance'
-    'cluster_method': 'spectral',    # 'kmeans' / 'hierarchical' / 'spectral' / 'dbscan'
-    'k_range': range(2, 7),
-    'alpha_grid': [0.0, 0.25, 0.5, 0.75, 1.0],
+    # --- 距離融合 ---
+    'method': 'distance',            # 特徴とメタデータを距離で融合
+    'cluster_method': 'spectral',    # 特徴距離行列に対するスペクトラルクラスタリング
+    
+    # --- クラスタ数探索 ---
+    'k_range': range(3, 10),         # クライアント数が多い場合、3〜9程度が安定
+    'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),  # 画像/メタデータ距離の重み比率を細かく探索
+    
+    # --- メタデータ重み ---
+    'metadata_weight': None,         # 自動スケーリング（画像特徴の分散に合わせて調整）
+    
+    # --- 可視化 ---
     'use_mds_for_visual': True,
     'mds_dim': 2,
+    
+    # --- 安定性 ---
     'random_state': 42
 }
 
