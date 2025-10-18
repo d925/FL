@@ -14,6 +14,9 @@ from sklearn.manifold import MDS, TSNE
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
 import matplotlib.pyplot as plt
 
+from utils import get_partitioned_data
+from config import num_clients
+
 # ============================================================
 # ================== パラメータ設定 =========================
 params = {
@@ -91,7 +94,32 @@ def evaluate_clusters(features, cluster_ids, method_name="Clustering"):
 # ================== クラスタリング関数 ====================
 # ============================================================
 
-def cluster_clients_with_metadata_ratio(feature_extractor=None):
+def cluster_clients_with_metadata_ratio(
+    num_clients,
+    feature_extractor=None,
+    method='distance',           # 'concat' / 'distance'
+    cluster_method='spectral',   # 'kmeans' / 'hierarchical' / 'spectral' / 'dbscan'
+    k_range=range(2,7),
+    alpha_grid=None,
+    metadata_weight=None,
+    use_mds_for_visual=True,
+    random_state=42
+):
+    """
+    Args:
+        num_clients: クライアント総数
+        feature_extractor: PyTorchモデル. NoneでデフォルトCNN
+        method: 'concat' または 'distance'
+        cluster_method: 'kmeans' / 'hierarchical' / 'spectral' / 'dbscan'
+        k_range: 探索するクラスタ数
+        alpha_grid: 距離融合時の画像重みリスト
+        metadata_weight: メタデータ比率の重み。Noneで自動計算
+        use_mds_for_visual: TrueでMDS可視化
+        random_state: 乱数シード
+    Returns:
+        dict: {client_id: cluster_id}
+    """
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # モデル準備
@@ -103,18 +131,22 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
         model = feature_extractor
     model.to(device)
 
+    # -------------------------
     # 画像特徴抽出
+    # -------------------------
     client_features = []
-    for cid in range(params['num_clients']):
+    for cid in range(num_clients):
         feat = extract_features(cid, model, device)
         client_features.append(feat)
     client_features = np.vstack(client_features)
 
-    # クライアントごとのメタデータ比率
+    # -------------------------
+    # メタデータ比率ベクトル
+    # -------------------------
     client_label_stats = []
     all_crops, all_diseases = set(), set()
-    for cid in range(params['num_clients']):
-        dataset, _ = get_partitioned_data(cid, params['num_clients'])
+    for cid in range(num_clients):
+        dataset, _ = get_partitioned_data(cid, num_clients)
         class_names = dataset.classes
         label_counts = defaultdict(int)
         for _, label in dataset:
@@ -148,10 +180,11 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
 
     metadata_ratios = np.vstack([compute_ratio_vector(s) for s in client_label_stats])
 
-    # 自動メタデータ重み
+    # -------------------------
+    # メタデータ重み自動計算
+    # -------------------------
     img_var = np.var(client_features)
     meta_var = np.var(metadata_ratios)
-    metadata_weight = params['metadata_weight']
     if metadata_weight is None:
         metadata_weight = float(np.sqrt(img_var / (meta_var + 1e-12)))
         metadata_weight = float(np.clip(metadata_weight, 1e-3, 1e3))
@@ -161,18 +194,23 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
     os.makedirs(results_dir, exist_ok=True)
 
     # -------------------------
-    # 横結合 / 距離融合の共通前処理
+    # 前処理: 標準化
     # -------------------------
     img_scaled = StandardScaler().fit_transform(client_features)
     meta_scaled = StandardScaler().fit_transform(metadata_ratios * metadata_weight)
 
-    if params['method'] == "concat":
+    if alpha_grid is None:
+        alpha_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+    # -------------------------
+    # 横結合クラスタリング
+    # -------------------------
+    if method == "concat":
         X = np.hstack([img_scaled, meta_scaled])
-        # クラスタリング
-        if params['cluster_method'] == "kmeans":
+        if cluster_method == "kmeans":
             best_k, best_labels, best_score = None, None, -np.inf
-            for k in params['k_range']:
-                kmeans = KMeans(n_clusters=k, random_state=params['random_state'], n_init=20).fit(X)
+            for k in k_range:
+                kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=20).fit(X)
                 labels = kmeans.labels_
                 sil = silhouette_score(X, labels)
                 ch = calinski_harabasz_score(X, labels)
@@ -183,36 +221,34 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
                     best_k = k
                     best_labels = labels
             print(f"[Concat][KMeans] best_k={best_k}, silhouette={sil:.4f}")
-
-        elif params['cluster_method'] == "hierarchical":
-            best_labels = AgglomerativeClustering(n_clusters=max(params['k_range']), linkage='ward').fit_predict(X)
+        elif cluster_method == "hierarchical":
+            best_labels = AgglomerativeClustering(n_clusters=max(k_range), linkage='ward').fit_predict(X)
             print(f"[Concat][Hierarchical] clusters formed: {len(np.unique(best_labels))}")
-
-        elif params['cluster_method'] == "dbscan":
+        elif cluster_method == "dbscan":
             best_labels = DBSCAN(metric='euclidean', eps=0.5, min_samples=5).fit_predict(X)
             print(f"[Concat][DBSCAN] clusters formed: {len(np.unique(best_labels))}")
-
         else:
             raise ValueError("Unsupported cluster_method for concat")
 
-        visualize_clusters(X, best_labels, title=f"Concat Clusters ({params['cluster_method']})")
-        return {cid: int(best_labels[cid]) for cid in range(params['num_clients'])}
+        visualize_clusters(X, best_labels, title=f"Concat Clusters ({cluster_method})")
+        return {cid: int(best_labels[cid]) for cid in range(num_clients)}
 
-    elif params['method'] == "distance":
-        # 距離行列
+    # -------------------------
+    # 距離融合クラスタリング
+    # -------------------------
+    elif method == "distance":
         d_img = pairwise_distances(img_scaled, metric="euclidean")
         d_meta = pairwise_distances(meta_scaled, metric="euclidean")
-
         best_alpha, best_k, best_labels, best_sil = None, None, None, -np.inf
 
-        for alpha in params['alpha_grid']:
+        for alpha in alpha_grid:
             D = alpha * d_img + (1.0 - alpha) * d_meta
-            if params['cluster_method'] == "spectral":
+            if cluster_method == "spectral":
                 sigma = np.std(D) if np.std(D) > 1e-8 else 1.0
                 A = np.exp(-D / (sigma + 1e-12))
-                for k in params['k_range']:
+                for k in k_range:
                     sc = SpectralClustering(n_clusters=k, affinity="precomputed",
-                                            random_state=params['random_state'], n_init=10)
+                                            random_state=random_state, n_init=10)
                     labels = sc.fit_predict(A)
                     try:
                         sil = silhouette_score(D, labels, metric="precomputed")
@@ -224,8 +260,8 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
                         best_k = k
                         best_labels = labels
 
-            elif params['cluster_method'] == "hierarchical":
-                for k in params['k_range']:
+            elif cluster_method == "hierarchical":
+                for k in k_range:
                     labels = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='average').fit_predict(D)
                     try:
                         sil = silhouette_score(D, labels, metric="precomputed")
@@ -237,7 +273,7 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
                         best_k = k
                         best_labels = labels
 
-            elif params['cluster_method'] == "dbscan":
+            elif cluster_method == "dbscan":
                 labels = DBSCAN(metric='precomputed', eps=0.5, min_samples=5).fit_predict(D)
                 try:
                     sil = silhouette_score(D, labels, metric="precomputed")
@@ -254,23 +290,22 @@ def cluster_clients_with_metadata_ratio(feature_extractor=None):
 
         print(f"[DistanceFusion] best_alpha={best_alpha}, k={best_k}, silhouette={best_sil:.4f}")
 
-        # 可視化
-        if params['use_mds_for_visual']:
+        if use_mds_for_visual:
             try:
-                mds = MDS(n_components=2, dissimilarity="precomputed", random_state=params['random_state'])
+                mds = MDS(n_components=2, dissimilarity="precomputed", random_state=random_state)
                 X2 = mds.fit_transform(best_alpha * d_img + (1.0 - best_alpha) * d_meta)
                 plt.figure(figsize=(8,6))
                 for cl in np.unique(best_labels):
                     idx = best_labels == cl
                     plt.scatter(X2[idx,0], X2[idx,1], label=f"Cluster {cl}", alpha=0.7)
                 plt.legend()
-                plt.title(f"DistanceFusion {params['cluster_method']} alpha={best_alpha}, k={best_k}")
-                plt.savefig(os.path.join(results_dir, "distancefusion_plot.png"), dpi=300, bbox_inches="tight")
+                plt.title(f"DistanceFusion {cluster_method} alpha={best_alpha}, k={best_k}")
+                plt.savefig(os.path.join("results", "distancefusion_plot.png"), dpi=300, bbox_inches="tight")
                 plt.show()
             except Exception as e:
                 print("[Warning] MDS visualization failed:", e)
 
-        return {cid: int(best_labels[cid]) for cid in range(params['num_clients'])}
+        return {cid: int(best_labels[cid]) for cid in range(num_clients)}
 
     else:
         raise ValueError("method must be 'concat' or 'distance'")
