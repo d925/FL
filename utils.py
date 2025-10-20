@@ -1,4 +1,3 @@
-# data_utils.py
 import torch
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
@@ -7,18 +6,31 @@ import os
 import json
 from config import num_labels, alpha
 from PIL import Image
-import numpy as np  # 追加
-import glob
+import numpy as np
 import random
-
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset"
+PROCESSED_DATA_DIR = "./processed_dataset_4crops"
 
 
-def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float = alpha):
-    # 乱数シード完全固定
+def generate_and_save_dirichlet_partitioned_data(
+    num_clients: int,
+    alpha: float = alpha,
+    target_crops=["Apple", "Corn", "Grape", "Tomato"]
+):
+    """
+    PlantVillage データセットを Dirichlet 分布に基づいてクライアントに非IID分割して保存。
+
+    Args:
+        num_clients (int): クライアント数
+        alpha (float): Dirichlet 分布のパラメータ（小さいほど非IIDが強い）
+        target_crops (list[str] or None): ["Apple", "Corn", "Grape", "Tomato"] など。
+                                          None の場合は全クラスを使用。
+    """
+    # =========================================================
+    # 乱数シード固定
+    # =========================================================
     SEED = 42
     random.seed(SEED)
     np.random.seed(SEED)
@@ -26,21 +38,52 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     if torch.cuda.is_available():
         torch.cuda.manual_seed(SEED)
         torch.cuda.manual_seed_all(SEED)
-    # cudnnの再現性設定
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+    # =========================================================
+    # 既存データチェック
+    # =========================================================
     if os.path.exists(PROCESSED_DATA_DIR):
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
             print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
             return
-    dataset = ImageFolder(root=DATA_DIR)
-    total_samples = len(dataset.samples)
-    print(f"元のデータセット総数: {total_samples}")
-    class_to_idx = dataset.class_to_idx
-    num_classes = len(class_to_idx)
 
+    # =========================================================
+    # 1️⃣ データロード
+    # =========================================================
+    dataset = ImageFolder(root=DATA_DIR)
+    all_classes = dataset.classes
+    print(f"全クラス数: {len(all_classes)}")
+
+    # =========================================================
+    # 2️⃣ 作物フィルタ（必要なら）
+    # =========================================================
+    if target_crops is not None:
+        target_crops = set(target_crops)
+        selected_classes = [cls for cls in all_classes if cls.split("___")[0] in target_crops]
+        print(f"🎯 対象作物クラス数: {len(selected_classes)} / {len(all_classes)}")
+        print(f"→ {sorted(target_crops)}")
+        print(f"→ 対象クラス例: {selected_classes[:8]}")
+
+        selected_indices = [
+            i for i, (_, label) in enumerate(dataset.samples)
+            if dataset.classes[label].split("___")[0] in target_crops
+        ]
+        dataset.samples = [dataset.samples[i] for i in selected_indices]
+        dataset.classes = selected_classes
+        dataset.class_to_idx = {cls: i for i, cls in enumerate(selected_classes)}
+    else:
+        selected_classes = all_classes  # 全部使う
+
+    num_classes = len(selected_classes)
+    total_samples = len(dataset.samples)
+    print(f"最終的に使用するクラス数: {num_classes}, 画像数: {total_samples}")
+
+    # =========================================================
+    # 3️⃣ クラスごとにサンプルを整理
+    # =========================================================
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
         label_to_indices[label].append(idx)
@@ -49,6 +92,9 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
     client_labels = defaultdict(set)
     client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
+    # =========================================================
+    # 4️⃣ Dirichlet による非IID分割
+    # =========================================================
     for label in range(num_classes):
         indices = label_to_indices[label]
         np.random.shuffle(indices)
@@ -68,17 +114,21 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
+
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
-    
+
+    # =========================================================
+    # 5️⃣ 各クライアントごとに train/test 分割して保存
+    # =========================================================
     transform = transforms.Resize((128, 128))
+
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
             os.makedirs(save_base, exist_ok=True)
 
         train_indices, test_indices = [], []
-
         for label, indices in client_indices_per_label[client_id].items():
             np.random.shuffle(indices)
             split = int(0.8 * len(indices))
@@ -90,16 +140,17 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
                 path, label = dataset.samples[idx]
                 img = Image.open(path).convert("RGB")
                 img = transform(img)
-                class_name = os.path.basename(os.path.dirname(path))  # 元のフォルダ名 (Apple___Apple_scab)
+                class_name = dataset.classes[label]
                 class_dir = os.path.join(base_dir, class_name)
                 os.makedirs(class_dir, exist_ok=True)
-                filename = os.path.basename(path)
-                img.save(os.path.join(class_dir, filename))
+                img.save(os.path.join(class_dir, os.path.basename(path)))
 
         save_images(train_indices, os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}"))
         save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}"))
 
-    # 割り当てラベルを保存
+    # =========================================================
+    # 6️⃣ メタ情報保存
+    # =========================================================
     label_assignments = {cid: sorted(list(labels)) for cid, labels in client_labels.items()}
     label_to_clients = defaultdict(list)
     for cid, labels in label_assignments.items():
@@ -108,12 +159,18 @@ def generate_and_save_dirichlet_partitioned_data(num_clients: int, alpha: float 
 
     with open(LABEL_ASSIGN_PATH, "w") as f:
         json.dump({
+            "target_crops": sorted(list(target_crops)) if target_crops else "ALL",
+            "num_total_labels": num_classes,
             "label_assignments": {str(k): v for k, v in label_assignments.items()},
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
-            "num_total_labels": num_classes,
         }, f, indent=2)
 
-    
+    print("✅ Dirichlet分割完了")
+    if target_crops:
+        print(f"→ 対象作物: {sorted(target_crops)}")
+    else:
+        print("→ 全作物を使用しました。")
+
 
 def get_partitioned_data(client_id: int, num_clients: int):
     # 加工済みデータのフォルダ読み込み
