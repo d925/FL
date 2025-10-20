@@ -21,8 +21,8 @@ from config import num_clients
 # ================== パラメータ設定 =========================
 params = {
     # --- 距離融合 ---
-    'method': 'concat',            # 特徴とメタデータを距離で融合
-    'cluster_method': 'kmeans',    # 特徴距離行列に対するスペクトラルクラスタリング
+    'method': 'distance',            # 特徴とメタデータを距離で融合
+    'cluster_method': 'spectral',    # 特徴距離行列に対するスペクトラルクラスタリング
     
     # --- クラスタ数探索 ---
     'k_range': range(3, 10),         # クライアント数が多い場合、3〜9程度が安定
