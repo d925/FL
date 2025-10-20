@@ -118,6 +118,9 @@ def generate_and_save_dirichlet_partitioned_data(
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
+    
+    assigned_total = sum(len(indices) for indices in client_indices.values())
+    print(f"クライアントへの割り当て総数: {assigned_total}")
 
     # =========================================================
     # 5️⃣ 各クライアントごとに train/test 分割して保存
