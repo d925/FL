@@ -1,3 +1,5 @@
+# run_clients_fedprox.py  （あなたの既存スクリプトをそのまま置き換える想定）
+
 import os
 import json
 import random
@@ -16,6 +18,12 @@ import torch.optim as optim
 import torch.nn as nn
 from flwr.client import NumPyClient
 
+# -------------------
+# FedProx ハイパーパラメータ
+# 0 にすると標準の FedAvg と等価
+FEDPROX_MU = 0.01
+# -------------------
+
 # 乱数シード完全固定
 SEED = 42
 random.seed(SEED)
@@ -27,46 +35,41 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# 結果保存ディレクトリ作成
+# 結果保存ディレクトリ作成（前回削除）
 RESULTS_BASE_DIR = "results"
 if os.path.exists(RESULTS_BASE_DIR):
-    shutil.rmtree(RESULTS_BASE_DIR)  # 前回の結果を完全削除
+    shutil.rmtree(RESULTS_BASE_DIR)
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
 if is_cluster:
-    # Step 2: クラスタリング実行
-    #client_cluster_map = cluster_clients(num_clients=num_clients)
-    #cluster_clients_kmeans_dual(num_clients=num_clients)
-    #client_cluster_map = cluster_clients_with_metadata(num_clients=num_clients)
     client_cluster_map = cluster_clients_with_metadata_ratio(num_clients=num_clients)
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
-    
     cluster_list = sorted(set(client_cluster_map.values()))
-    num_clusters = len(cluster_list)  # ★ クラスタ数を自動反映
+    num_clusters = len(cluster_list)
 else:
-    client_cluster_map = {cid: 0 for cid in range(num_clients)}  # 全クライアントをクラスタ0に所属させる
+    client_cluster_map = {cid: 0 for cid in range(num_clients)}
     cluster_list = [0]
     num_clusters = 1
 
-
-
-# クラスタ単位の最終結果保持用
 final_cluster_metrics = {}
 total_correct = 0
 total_samples = 0
 
-# クライアントクラス定義
+# -------------------------
+# FLClient（FedProx対応）
+# -------------------------
 class FLClient(NumPyClient):
-    def __init__(self, cid, active_cids):
+    def __init__(self, cid, active_cids, mu=FEDPROX_MU):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CNN(num_classes=num_labels).to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self.mu = float(mu)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
@@ -87,30 +90,47 @@ class FLClient(NumPyClient):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
+        # グローバルパラメータをモデルにセット
         self.set_parameters(parameters)
+
+        # FedProx: "global_params" を保存（勾配計算対象外）
+        global_params = [p.detach().clone() for p in self.model.parameters()]
+
+        # オプティマイザ再作成（必要ならハイパラをここで変える）
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
         scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.8)
-        
+
         self.model.train()
         prev_loss = float('inf')
-        for epoch in range(1):
+        EPOCHS = 1  # 現状 1 エポック（必要なら増やす）
+        for epoch in range(EPOCHS):
             running_loss = 0.0
             for data, target in self.trainloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model(data)
                 loss = self.criterion(output, target)
+
+                # ---------- FedProx の proximal term を追加 ----------
+                if self.mu > 0:
+                    prox_term = 0.0
+                    for p, g in zip(self.model.parameters(), global_params):
+                        prox_term += torch.sum((p - g.to(self.device)) ** 2)
+                    # 正規化（サンプル数やパラメータ数で割る場合はここで調整）
+                    loss = loss + (self.mu / 2.0) * prox_term
+                # ----------------------------------------------------
+
                 loss.backward()
                 self.optimizer.step()
                 running_loss += loss.item()
             scheduler.step()
 
-            # Early stop-like挙動
+            # Early stop-like 挙動（変化が小さければ break）
             if abs(prev_loss - running_loss) < 1e-3:
                 break
             prev_loss = running_loss
 
-        self.log(f"Finished local training (final loss={prev_loss:.4f})")
+        self.log(f"Finished local training (final loss={prev_loss:.4f}, mu={self.mu})")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return self.get_parameters(config), len(self.trainloader.dataset), {}
@@ -132,7 +152,8 @@ class FLClient(NumPyClient):
         self.log(f"Loss: {avg_loss:.4f}, Accuracy: {accuracy * 100:.2f}%")
         return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy, "loss": avg_loss}
 
-# Step 3: クラスタごとのFL実行ループ
+
+# Step 3: クラスタごとのFL実行ループ（以降は従来コードと同様）
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
@@ -147,7 +168,7 @@ for cluster_id in range(num_clusters):
         for i, (num_examples, metrics) in enumerate(results):
             acc = metrics["accuracy"]
             loss = metrics["loss"]
-            weight = num_examples / (loss + 1e-6)  # 低lossクライアントを強調
+            weight = num_examples / (loss + 1e-6)
             weighted_sum_acc += acc * weight
             weighted_sum_loss += loss * weight
             total_weight += weight
@@ -164,7 +185,6 @@ for cluster_id in range(num_clusters):
 
         print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
 
-        # 🔽 各クラスタごとのファイルにラウンド結果を1行ずつ追記
         output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
         os.makedirs(output_dir, exist_ok=True)
         summary_file = os.path.join(output_dir, "round_metrics.jsonl")
@@ -178,10 +198,9 @@ for cluster_id in range(num_clusters):
 
         with open(summary_file, "a") as f:
             json.dump(round_summary, f)
-            f.write("\n")  # JSONL形式で追記
+            f.write("\n")
 
         return {"accuracy": avg_accuracy, "loss": avg_loss}
-
 
     strategy = fl.server.strategy.FedAvg(
         fraction_fit=1.0,
@@ -193,19 +212,17 @@ for cluster_id in range(num_clusters):
     )
 
     from flwr.common import Context
-
     client_cache = {}
 
     def client_fn(context: Context):
-        cid_int = context.node_config.get("partition-id", context.node_id)    # Map to real client ID via selected_cids
+        cid_int = context.node_config.get("partition-id", context.node_id)
         idx = int(cid_int)
         real_cid = selected_cids[idx]
 
         if real_cid not in client_cache:
-            client_cache[real_cid] = FLClient(real_cid, selected_cids).to_client()
-
+            # FedProx の μ をクライアントへ渡す（ここではグローバル定数を使用）
+            client_cache[real_cid] = FLClient(real_cid, selected_cids, mu=FEDPROX_MU).to_client()
         return client_cache[real_cid]
-
 
     history = fl.simulation.start_simulation(
         client_fn=client_fn,
@@ -230,7 +247,7 @@ for cluster_id in range(num_clusters):
     total_correct += correct
     total_samples += examples
 
-# 最終集計・保存
+# 最終集計・保存（従来通り）
 overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
 final_cluster_metrics["overall"] = {
     "accuracy": overall_accuracy,
