@@ -11,7 +11,7 @@ import random
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset_4crops_0.5alpha_30clients"
+PROCESSED_DATA_DIR = "./processed_dataset_4crops_0.5alpha"
 
 
 def generate_and_save_dirichlet_partitioned_data(
@@ -21,7 +21,6 @@ def generate_and_save_dirichlet_partitioned_data(
 ):
     """
     PlantVillage データセットを Dirichlet 分布に基づいてクライアントに非IID分割して保存。
-    各クライアントの総サンプル数が大きく偏らないように補正付き。
 
     Args:
         num_clients (int): クライアント数
@@ -52,20 +51,21 @@ def generate_and_save_dirichlet_partitioned_data(
             return
 
     # =========================================================
-    # データロード
+    # 1️⃣ データロード
     # =========================================================
     dataset = ImageFolder(root=DATA_DIR)
     all_classes = dataset.classes
     print(f"全クラス数: {len(all_classes)}")
 
     # =========================================================
-    # 作物フィルタ（必要なら）
+    # 2️⃣ 作物フィルタ（必要なら）
     # =========================================================
     if target_crops is not None:
         target_crops = set(target_crops)
         selected_classes = [cls for cls in all_classes if cls.split("___")[0] in target_crops]
         print(f"🎯 対象作物クラス数: {len(selected_classes)} / {len(all_classes)}")
         print(f"→ {sorted(target_crops)}")
+        print(f"→ 対象クラス例: {selected_classes[:8]}")
 
         selected_indices = [
             i for i, (_, label) in enumerate(dataset.samples)
@@ -82,7 +82,7 @@ def generate_and_save_dirichlet_partitioned_data(
     print(f"最終的に使用するクラス数: {num_classes}, 画像数: {total_samples}")
 
     # =========================================================
-    # クラスごとにインデックス整理
+    # 3️⃣ クラスごとにサンプルを整理
     # =========================================================
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
@@ -90,62 +90,46 @@ def generate_and_save_dirichlet_partitioned_data(
 
     client_indices = defaultdict(list)
     client_labels = defaultdict(set)
-    client_indices_per_label = {cid: defaultdict(list) for cid in range(num_clients)}
+    client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
     # =========================================================
-    # Dirichlet 分割 + 均等化補正
+    # 4️⃣ Dirichlet による非IID分割
     # =========================================================
-    avg_per_client = total_samples // num_clients
-    client_sample_counts = np.zeros(num_clients, dtype=int)
-
     for label in range(num_classes):
         indices = label_to_indices[label]
         np.random.shuffle(indices)
 
-        # 基本の Dirichlet 比率
         proportions = np.random.dirichlet([alpha] * num_clients)
+        proportions = (proportions * len(indices)).astype(int)
 
-        # サンプル数補正（多く持っているクライアントには割り当て減らす）
-        remaining_quota = np.maximum(avg_per_client * 1.2 - client_sample_counts, 1e-6)
-        proportions = proportions * remaining_quota
-        proportions = proportions / proportions.sum()
+        while proportions.sum() < len(indices):
+            proportions[np.argmax(proportions)] += 1
 
-        counts = (proportions * len(indices)).astype(int)
-
-        # 総和を調整（誤差分を最大クライアントに配分）
-        while counts.sum() < len(indices):
-            counts[np.argmax(proportions)] += 1
-
-        # 割り当て実行
         start = 0
-        for cid, count in enumerate(counts):
-            if count <= 0:
+        for client_id, count in enumerate(proportions):
+            if count == 0:
                 continue
             subset = indices[start:start + count]
-            client_indices[cid].extend(subset)
-            client_labels[cid].add(label)
-            client_indices_per_label[cid][label].extend(subset)
-            client_sample_counts[cid] += count
+            client_indices[client_id].extend(subset)
+            client_labels[client_id].add(label)
+            client_indices_per_label[client_id][label].extend(subset)
             start += count
 
-    print(f"クライアントごとのサンプル数（均等化後）:")
-    for cid, count in enumerate(client_sample_counts):
-        print(f"  Client {cid}: {count} 枚")
-
-    print(f"合計 = {client_sample_counts.sum()} (理論値 {total_samples})")
+    assigned_total = sum(len(indices) for indices in client_indices.values())
+    print(f"クライアントへの割り当て総数: {assigned_total}")
 
     # =========================================================
-    # クライアントごとに train/test 分割して保存
+    # 5️⃣ 各クライアントごとに train/test 分割して保存
     # =========================================================
     transform = transforms.Resize((128, 128))
 
-    for cid in range(num_clients):
+    for client_id in range(num_clients):
         for mode in ["train", "test"]:
-            save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{cid}")
+            save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
             os.makedirs(save_base, exist_ok=True)
 
         train_indices, test_indices = [], []
-        for label, indices in client_indices_per_label[cid].items():
+        for label, indices in client_indices_per_label[client_id].items():
             np.random.shuffle(indices)
             split = int(0.8 * len(indices))
             train_indices.extend(indices[:split])
@@ -161,11 +145,11 @@ def generate_and_save_dirichlet_partitioned_data(
                 os.makedirs(class_dir, exist_ok=True)
                 img.save(os.path.join(class_dir, os.path.basename(path)))
 
-        save_images(train_indices, os.path.join(PROCESSED_DATA_DIR, "train", f"client_{cid}"))
-        save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{cid}"))
+        save_images(train_indices, os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}"))
+        save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}"))
 
     # =========================================================
-    # メタ情報保存
+    # 6️⃣ メタ情報保存
     # =========================================================
     label_assignments = {cid: sorted(list(labels)) for cid, labels in client_labels.items()}
     label_to_clients = defaultdict(list)
@@ -179,26 +163,30 @@ def generate_and_save_dirichlet_partitioned_data(
             "num_total_labels": num_classes,
             "label_assignments": {str(k): v for k, v in label_assignments.items()},
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
-            "client_sample_counts": client_sample_counts.tolist()
         }, f, indent=2)
 
-    print("✅ Dirichlet分割完了（均等化補正あり）")
-    print(f"→ 対象作物: {sorted(target_crops) if target_crops else 'ALL'}")
-    print(f"→ alpha={alpha}")
+    print("✅ Dirichlet分割完了")
+    if target_crops:
+        print(f"→ 対象作物: {sorted(target_crops)}")
+    else:
+        print("→ 全作物を使用しました。")
 
 
 def get_partitioned_data(client_id: int, num_clients: int):
+    # 加工済みデータのフォルダ読み込み
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ])
+
     test_transform = transforms.Compose([
         transforms.ToTensor(),
     ])
 
+    
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
-
+    
     train_dataset = ImageFolder(root=train_dir, transform=train_transform)
     test_dataset = ImageFolder(root=test_dir, transform=test_transform)
 
