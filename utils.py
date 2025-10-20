@@ -93,20 +93,24 @@ def generate_and_save_dirichlet_partitioned_data(
     client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
     # =========================================================
-    # 4️⃣ Dirichlet による非IID分割
+    # 4️⃣ Dirichlet による非IID分割（余り補正付き）
     # =========================================================
     for label in range(num_classes):
         indices = label_to_indices[label]
         np.random.shuffle(indices)
 
         proportions = np.random.dirichlet([alpha] * num_clients)
-        proportions = (proportions * len(indices)).astype(int)
+        proportions = (proportions / proportions.sum()) * len(indices)
+        int_parts = np.floor(proportions).astype(int)
+        remainder = len(indices) - int_parts.sum()
 
-        while proportions.sum() < len(indices):
-            proportions[np.argmax(proportions)] += 1
+        # 残りの画像を大きい比率のクライアントに順に配る
+        if remainder > 0:
+            add_indices = np.argsort(proportions - int_parts)[-remainder:]
+            int_parts[add_indices] += 1
 
         start = 0
-        for client_id, count in enumerate(proportions):
+        for client_id, count in enumerate(int_parts):
             if count == 0:
                 continue
             subset = indices[start:start + count]
@@ -114,9 +118,6 @@ def generate_and_save_dirichlet_partitioned_data(
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
-
-    assigned_total = sum(len(indices) for indices in client_indices.values())
-    print(f"クライアントへの割り当て総数: {assigned_total}")
 
     # =========================================================
     # 5️⃣ 各クライアントごとに train/test 分割して保存
