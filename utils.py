@@ -60,22 +60,38 @@ def generate_and_save_dirichlet_partitioned_data(
     # =========================================================
     # 2️⃣ 作物フィルタ（必要なら）
     # =========================================================
+# 2️⃣ 作物フィルタ（必要なら）
     if target_crops is not None:
         target_crops = set(target_crops)
         selected_classes = [cls for cls in all_classes if cls.split("___")[0] in target_crops]
         print(f"🎯 対象作物クラス数: {len(selected_classes)} / {len(all_classes)}")
         print(f"→ {sorted(target_crops)}")
-        print(f"→ 対象クラス例: {selected_classes[:8]}")
 
+        # 該当クラスのみに限定
         selected_indices = [
-            i for i, (_, label) in enumerate(dataset.samples)
+            i for i, (path, label) in enumerate(dataset.samples)
             if dataset.classes[label].split("___")[0] in target_crops
         ]
-        dataset.samples = [dataset.samples[i] for i in selected_indices]
-        dataset.classes = selected_classes
-        dataset.class_to_idx = {cls: i for i, cls in enumerate(selected_classes)}
+
+        # ✅ 新しいサンプル構築＋再ラベル付け
+        old_to_new = {}
+        new_classes = sorted(selected_classes)
+        for new_idx, cls_name in enumerate(new_classes):
+            old_to_new[dataset.class_to_idx[cls_name]] = new_idx
+
+        new_samples = []
+        for i in selected_indices:
+            path, old_label = dataset.samples[i]
+            if old_label in old_to_new:
+                new_label = old_to_new[old_label]
+                new_samples.append((path, new_label))
+
+        dataset.samples = new_samples
+        dataset.classes = new_classes
+        dataset.class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
+
     else:
-        selected_classes = all_classes  # 全部使う
+        selected_classes = all_classes
 
     num_classes = len(selected_classes)
     total_samples = len(dataset.samples)
@@ -93,24 +109,20 @@ def generate_and_save_dirichlet_partitioned_data(
     client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
     # =========================================================
-    # 4️⃣ Dirichlet による非IID分割（余り補正付き）
+    # 4️⃣ Dirichlet による非IID分割
     # =========================================================
     for label in range(num_classes):
         indices = label_to_indices[label]
         np.random.shuffle(indices)
 
         proportions = np.random.dirichlet([alpha] * num_clients)
-        proportions = (proportions / proportions.sum()) * len(indices)
-        int_parts = np.floor(proportions).astype(int)
-        remainder = len(indices) - int_parts.sum()
+        proportions = (proportions * len(indices)).astype(int)
 
-        # 残りの画像を大きい比率のクライアントに順に配る
-        if remainder > 0:
-            add_indices = np.argsort(proportions - int_parts)[-remainder:]
-            int_parts[add_indices] += 1
+        while proportions.sum() < len(indices):
+            proportions[np.argmax(proportions)] += 1
 
         start = 0
-        for client_id, count in enumerate(int_parts):
+        for client_id, count in enumerate(proportions):
             if count == 0:
                 continue
             subset = indices[start:start + count]
@@ -118,7 +130,7 @@ def generate_and_save_dirichlet_partitioned_data(
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
-    
+
     assigned_total = sum(len(indices) for indices in client_indices.values())
     print(f"クライアントへの割り当て総数: {assigned_total}")
 
