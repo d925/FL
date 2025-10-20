@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import shutil
 import numpy as np
 import torch
 from config import num_clients, num_rounds, is_cluster
@@ -28,6 +29,8 @@ torch.backends.cudnn.benchmark = False
 
 # 結果保存ディレクトリ作成
 RESULTS_BASE_DIR = "results"
+if os.path.exists(RESULTS_BASE_DIR):
+    shutil.rmtree(RESULTS_BASE_DIR)  # 前回の結果を完全削除
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
 generate_and_save_dirichlet_partitioned_data(num_clients)
