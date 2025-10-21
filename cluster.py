@@ -83,7 +83,7 @@ def determine_optimal_k(features, k_range=range(2, 11)):
 
     print(f"🧠 最適なクラスタ数: {best_k}")
     return best_k
-def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=50):
+def cluster_clients(num_clients, feature_extractor=None, use_pca=True, pca_components=num_clients):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if feature_extractor is None:
         from model import CNN
