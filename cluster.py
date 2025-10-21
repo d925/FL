@@ -35,7 +35,7 @@ def extract_features(client_id, model, device):
             features.append(feat.cpu().numpy())
     return np.concatenate(features, axis=0).mean(axis=0)
 
-def preprocess_features(features, use_pca=True, n_components=50):
+def preprocess_features(features, use_pca=True, n_components=num_clients):
     scaler = StandardScaler()
     scaled = scaler.fit_transform(features)
     if use_pca:
