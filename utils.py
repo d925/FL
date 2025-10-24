@@ -11,13 +11,13 @@ import random
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset_4crops_0.1waalpha"
+PROCESSED_DATA_DIR = "./processed_dataset_0.5alpha"
 
 
 def generate_and_save_dirichlet_partitioned_data(
     num_clients: int,
     alpha: float = alpha,
-    target_crops=["Apple", "Corn", "Grape", "Tomato"]
+    target_crops=None
 ):
     """
     PlantVillage データセットを Dirichlet 分布に基づいてクライアントに非IID分割して保存。
