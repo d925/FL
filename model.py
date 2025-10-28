@@ -20,11 +20,11 @@ class CNN(nn.Module):
         backbone: 'small' (default) or 'resnet18'
         pretrained: if backbone == 'resnet18', load ImageNet pretrained weights (bool)
     """
-    def __init__(self, num_classes: int = num_labels, backbone: str = "resnet18", pretrained: bool = False):
+    def __init__(self, num_classes: int = num_labels, backbone: str = "small", pretrained: bool = False):
         super(CNN, self).__init__()
         self.backbone_name = backbone
 
-        if backbone == "small":
+        if backbone == "resnet18":
             if not _TORCHVISION_AVAILABLE:
                 raise RuntimeError("torchvision is required for backbone='resnet18'. Install torchvision.")
             # Load torchvision resnet18
