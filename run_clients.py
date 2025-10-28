@@ -21,7 +21,7 @@ from flwr.common.parameter import ndarrays_to_parameters, parameters_to_ndarrays
 
 # -------------------
 # FedProx ハイパーパラメータ
-FEDPROX_MU = 0.
+FEDPROX_MU = 0.1
 # Adaptive weighting hyperparams
 AWM_LR = 0.1
 AWM_ALPHA = 0.4
@@ -52,7 +52,15 @@ generate_and_save_dirichlet_partitioned_data(num_clients)
 
 if is_cluster:
     client_cluster_map = cluster_clients_with_metadata_ratio(num_clients=num_clients)
+    print("クラスタリング結果:")
+    for cid, clust_id in client_cluster_map.items():
+        print(f"クライアント {cid} は クラスター {clust_id}")
+    cluster_list = sorted(set(client_cluster_map.values()))
+    num_clusters = len(cluster_list)
 else:
+    client_cluster_map = {cid: 0 for cid in range(num_clients)}
+    cluster_list = [0]
+    num_clusters = 1
     client_cluster_map = {cid: 0 for cid in range(num_clients)}
 
 cluster_list = sorted(set(client_cluster_map.values()))
