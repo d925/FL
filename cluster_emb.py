@@ -59,6 +59,25 @@ def extract_features(client_id, model, device):
     return np.concatenate(features, axis=0)  # 平均はせず全サンプル保持
 
 # ============================================================
+# ================== 可視化・評価関数 ======================
+# ============================================================
+def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-SNE 2D Projection)"):
+    tsne = TSNE(n_components=2, random_state=params['random_state'], perplexity=5)
+    reduced = tsne.fit_transform(features)
+    plt.figure(figsize=(8, 6))
+    for cluster in np.unique(cluster_ids):
+        idx = cluster_ids == cluster
+        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
+    plt.legend()
+    plt.title(title)
+    plt.xlabel("t-SNE Dim 1")
+    plt.ylabel("t-SNE Dim 2")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+# ============================================================
 # ================== クラスタリング関数 ====================
 def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use_distribution=True):
     """
@@ -147,43 +166,38 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
     # ==== 分布そのままの距離行列を作る手法 ====
     if use_distribution:
         n_clients = len(client_features_list)
-        dist_matrix = np.zeros((n_clients, n_clients))
+        dist_img = np.zeros((n_clients, n_clients))
         for i in range(n_clients):
             for j in range(i + 1, n_clients):
-                # 各特徴次元ごとに1D Wasserstein距離
                 wd = np.mean([wasserstein_distance(client_features_list[i][:, d],
-                                                  client_features_list[j][:, d])
-                              for d in range(client_features_list[i].shape[1])])
-                dist_matrix[i, j] = wd
-                dist_matrix[j, i] = wd
+                                                client_features_list[j][:, d])
+                            for d in range(client_features_list[i].shape[1])])
+                dist_img[i, j] = wd
+                dist_img[j, i] = wd
         print("[Distribution] Wasserstein距離行列を作成")
 
-        # スペクトラルクラスタリング
-        sigma = np.std(dist_matrix) if np.std(dist_matrix) > 1e-8 else 1.0
-        affinity = np.exp(-dist_matrix / (sigma + 1e-12))
-        best_sil, best_k, best_labels = -1, None, None
-        for k in k_range:
-            sc = SpectralClustering(n_clusters=k, affinity="precomputed",
-                                    random_state=random_state, n_init=10)
-            labels = sc.fit_predict(affinity)
-            try:
-                sil = silhouette_score(dist_matrix, labels, metric="precomputed")
-            except:
-                sil = -1
-            if sil > best_sil:
-                best_sil, best_k, best_labels = sil, k, labels
-        print(f"[DistributionFusion] best_k={best_k}, silhouette={best_sil:.4f}")
+        # メタデータ距離行列
+        dist_meta = pairwise_distances(metadata_ratios * metadata_weight, metric="euclidean")
 
-        if use_mds_for_visual:
-            mds = MDS(n_components=2, dissimilarity="precomputed", random_state=random_state)
-            X2 = mds.fit_transform(dist_matrix)
-            plt.figure(figsize=(8,6))
-            for cl in np.unique(best_labels):
-                idx = best_labels == cl
-                plt.scatter(X2[idx,0], X2[idx,1], label=f"Cluster {cl}", alpha=0.7)
-            plt.legend()
-            plt.title(f"DistributionFusion Spectral Clustering k={best_k}")
-            plt.show()
+        # αグリッド探索して最適クラスタリング
+        best_sil, best_alpha, best_k, best_labels = -1, None, None, None
+        for alpha in alpha_grid:
+            D = alpha * dist_img + (1 - alpha) * dist_meta
+            sigma = np.std(D) if np.std(D) > 1e-8 else 1.0
+            affinity = np.exp(-D / (sigma + 1e-12))
+
+            for k in k_range:
+                sc = SpectralClustering(n_clusters=k, affinity="precomputed",
+                                        random_state=random_state, n_init=10)
+                labels = sc.fit_predict(affinity)
+                try:
+                    sil = silhouette_score(D, labels, metric="precomputed")
+                except:
+                    sil = -1
+                if sil > best_sil:
+                    best_sil, best_alpha, best_k, best_labels = sil, alpha, k, labels
+
+        print(f"[Distribution+MetadataFusion] best_alpha={best_alpha}, best_k={best_k}, silhouette={best_sil:.4f}")
 
         return {cid: int(best_labels[cid]) for cid in range(n_clients)}
 
