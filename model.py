@@ -24,7 +24,7 @@ class CNN(nn.Module):
         super(CNN, self).__init__()
         self.backbone_name = backbone
 
-        if backbone == "resnet18":
+        if backbone == "small":
             if not _TORCHVISION_AVAILABLE:
                 raise RuntimeError("torchvision is required for backbone='resnet18'. Install torchvision.")
             # Load torchvision resnet18
