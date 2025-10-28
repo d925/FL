@@ -98,7 +98,7 @@ class FLClient(NumPyClient):
         global_params = [p.detach().clone() for p in self.model.parameters()]
 
         # オプティマイザ再作成（必要ならハイパラをここで変える）
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
         scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.8)
 
         self.model.train()
