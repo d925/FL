@@ -53,11 +53,11 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# ============================================
-# 修正版: extract_features
-# ============================================
+# ============================================================
+# ================== 特徴抽出関数 =========================
+# ============================================================
 def extract_features(client_id, model, device):
-    """クライアント単位で特徴を抽出（平均ではなく分布保持）"""
+    """クライアント単位で特徴を抽出"""
     dataset, _ = get_partitioned_data(client_id, num_clients)
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
     features = []
@@ -67,14 +67,7 @@ def extract_features(client_id, model, device):
             x = x.to(device)
             feat = model(x)
             features.append(feat.cpu().numpy())
-    features = np.vstack(features)  # 各サンプルの特徴をすべて保持
-    # 平均ではなく分布の代表としてPCAで次元圧縮する
-    from sklearn.decomposition import PCA
-    pca = PCA(n_components=min(16, features.shape[1]))  # 過度に次元削減せず16次元まで
-    reduced_feat = pca.fit_transform(features)
-    # クライアントごとの特徴ベクトルは平均で1つにまとめる
-    return reduced_feat.mean(axis=0)
-
+    return np.concatenate(features, axis=0).mean(axis=0)
 
 # ============================================================
 # ================== 可視化・評価関数 ======================
