@@ -1,48 +1,45 @@
+# cluster_emb.py
 import json
 import os
+import random
 from collections import defaultdict
+
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-import numpy as np
-import random
+
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 from sklearn.metrics import pairwise_distances
-from sklearn.cluster import KMeans, SpectralClustering
+from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, DBSCAN
 from sklearn.manifold import MDS, TSNE
-from sklearn.cluster import AgglomerativeClustering, DBSCAN
+
 import matplotlib.pyplot as plt
 
 from utils import get_partitioned_data
-from config import num_clients
+from config import num_clients, backbone_name
 
-# ============================================================
-# ================== パラメータ設定 =========================
+# -----------------------
+# params: adjustable grid
+# -----------------------
 params = {
-    # --- 距離融合 ---
-    'method': 'distance',            # 特徴とメタデータを距離で融合
-    'cluster_method': 'spectral',    # 特徴距離行列に対するスペクトラルクラスタリング
-    
-    # --- クラスタ数探索 ---
-    'k_range': range(3, 10),         # クライアント数が多い場合、3〜9程度が安定
-    'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),  # 画像/メタデータ距離の重み比率を細かく探索
-    
-    # --- メタデータ重み ---
-    'metadata_weight': None,         # 自動スケーリング（画像特徴の分散に合わせて調整）
-    
-    # --- 可視化 ---
+    # fusion method
+    'method': 'distance',             # 'concat' or 'distance'
+    'cluster_method': 'spectral',     # 'kmeans' / 'hierarchical' / 'spectral' / 'dbscan'
+    'k_range': range(3, 10),          # candidate cluster k
+    'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),  # fusion alpha grid (image weight)
+    'metadata_weight': None,          # None -> auto scale
+    'pca_meta_dim': 10,               # compress metadata ratios to at most this dim (auto-adjusted)
     'use_mds_for_visual': True,
     'mds_dim': 2,
-    
-    # --- 安定性 ---
-    'random_state': 42
+    'random_state': 42,
+    # embedding MDS/PCA dims for silhouette eval
+    'eval_embed_dim': 10,
 }
 
-
-# ============================================================
-# ================== 乱数シード固定 =========================
-# ============================================================
+# reproducibility
 SEED = params['random_state']
 random.seed(SEED)
 np.random.seed(SEED)
@@ -53,99 +50,119 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# ============================================================
-# ================== 特徴抽出関数 =========================
-# ============================================================
-def extract_features(client_id, model, device):
-    """クライアント単位で特徴を抽出"""
-    dataset, _ = get_partitioned_data(client_id, num_clients)
-    loader = DataLoader(dataset, batch_size=32, shuffle=False)
-    features = []
+# -----------------------
+# helper: extract embedding
+# -----------------------
+def extract_client_embedding_for_batch(model, x, device):
+    """
+    Return per-sample embedding (numpy array shape (B, D)).
+    Supports two model types:
+      - ResNet-like with attribute `feature_extractor` and avgpool (our model.py)
+      - small CNN with method `_forward_small` that returns conv feature map
+    """
     model.eval()
     with torch.no_grad():
-        for x, _ in loader:
-            x = x.to(device)
-            feat = model(x)
-            features.append(feat.cpu().numpy())
-    return np.concatenate(features, axis=0).mean(axis=0)
+        x = x.to(device)
+        if hasattr(model, "feature_extractor"):
+            feats = model.feature_extractor(x)  # e.g., (B, 512, 1, 1) or (B, C, H, W)
+            # If final spatial is >1, apply adaptive pool
+            if feats.dim() == 4:
+                feats = torch.nn.functional.adaptive_avg_pool2d(feats, (1, 1))
+                feats = feats.view(feats.size(0), -1)
+            else:
+                feats = feats.view(feats.size(0), -1)
+            emb = feats.cpu().numpy()
+            return emb
+        elif hasattr(model, "_forward_small"):
+            feats = model._forward_small(x)  # conv output, e.g. (B, C, H, W)
+            feats = feats.view(feats.size(0), -1)
+            emb = feats.cpu().numpy()
+            return emb
+        else:
+            # fallback: try forward but remove final classifier if possible
+            out = model(x)
+            if out.dim() == 2:
+                return out.cpu().numpy()
+            else:
+                return out.view(out.size(0), -1).cpu().numpy()
 
-# ============================================================
-# ================== 可視化・評価関数 ======================
-# ============================================================
-def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-SNE 2D Projection)"):
-    tsne = TSNE(n_components=2, random_state=params['random_state'], perplexity=5)
-    reduced = tsne.fit_transform(features)
-    plt.figure(figsize=(8, 6))
-    for cluster in np.unique(cluster_ids):
-        idx = cluster_ids == cluster
-        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
-    plt.legend()
-    plt.title(title)
-    plt.xlabel("t-SNE Dim 1")
-    plt.ylabel("t-SNE Dim 2")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
-    plt.show()
+def extract_features(client_id, model, device, batch_size=32):
+    """
+    Extract mean embedding per client.
+    Returns: numpy array shape (embedding_dim,)
+    """
+    dataset, _ = get_partitioned_data(client_id, num_clients)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    embeddings = []
+    for x, _ in loader:
+        emb = extract_client_embedding_for_batch(model, x, device)
+        embeddings.append(emb)
+    if len(embeddings) == 0:
+        # empty client guard
+        return np.zeros((1, 1)).reshape(-1)
+    embeddings = np.vstack(embeddings)
+    mean_emb = embeddings.mean(axis=0)
+    return mean_emb
 
-def evaluate_clusters(features, cluster_ids, method_name="Clustering"):
-    if len(np.unique(cluster_ids)) > 1:
-        sil_score = silhouette_score(features, cluster_ids)
-        ch_score = calinski_harabasz_score(features, cluster_ids)
-        db_score = davies_bouldin_score(features, cluster_ids)
-    else:
-        sil_score, ch_score, db_score = -1, -1, -1
-    print(f"🔍 {method_name} | Silhouette={sil_score:.4f}, CH={ch_score:.2f}, DB={db_score:.4f}")
-    return sil_score, ch_score, db_score
+# -----------------------
+# utility: safe perplexity
+# -----------------------
+def safe_tsne_perplexity(n_samples):
+    # recommended: 5 <= perplexity <= 50 and < n_samples/3
+    if n_samples < 15:
+        return 3
+    return min(30, max(5, n_samples // 3))
 
-# ============================================================
-# ================== クラスタリング関数 ====================
-# ============================================================
-
+# -----------------------
+# main clustering function
+# -----------------------
 def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
     """
-    params 辞書をグローバル参照してクラスタリングを行う。
+    Returns dict: {client_id: cluster_id}
+    Uses global params dict above.
     """
-    # ---- パラメータ参照 ----
-    metadata_weight   = params.get('metadata_weight', None)
-    method            = params.get('method', 'distance')
-    cluster_method    = params.get('cluster_method', 'spectral')
-    k_range           = params.get('k_range', range(2, 7))
-    alpha_grid        = params.get('alpha_grid', [0.0, 0.25, 0.5, 0.75, 1.0])
-    use_mds_for_visual= params.get('use_mds_for_visual', True)
-    random_state      = params.get('random_state', 42)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ---- モデル準備 ----
+    # load or use provided feature_extractor
     if feature_extractor is None:
         from model import CNN
-        model = CNN(num_classes=38)
-        model.fc2 = nn.Identity()
+        # create model consistent with backbone_name
+        if backbone_name == "resnet18":
+            model = CNN(num_classes=38, backbone="resnet18", pretrained=True)
+        else:
+            model = CNN(num_classes=38, backbone="small", pretrained=False)
     else:
         model = feature_extractor
     model.to(device)
 
-    # ---- 画像特徴抽出 ----
+    # -----------------------------
+    # 1) extract image embeddings per client
+    # -----------------------------
+    print("[Step] extracting image embeddings for each client...")
     client_features = []
     for cid in range(num_clients):
-        feat = extract_features(cid, model, device)
-        client_features.append(feat)
-    client_features = np.vstack(client_features)
+        emb = extract_features(cid, model, device, batch_size=32)
+        client_features.append(emb)
+    client_features = np.vstack(client_features)  # shape (N_clients, feat_dim)
+    print(f" extracted image embeddings shape: {client_features.shape}")
 
-    # ---- メタデータ比率ベクトル ----
+    # -----------------------------
+    # 2) build metadata ratio vectors per client
+    # -----------------------------
+    print("[Step] building metadata ratio vectors per client...")
     client_label_stats = []
     all_crops, all_diseases = set(), set()
     for cid in range(num_clients):
         dataset, _ = get_partitioned_data(cid, num_clients)
         class_names = dataset.classes
         label_counts = defaultdict(int)
-        for _, label in dataset:
+        # iterate dataset samples safely
+        for path, label in dataset.samples:
             label_counts[class_names[label]] += 1
         client_label_stats.append(label_counts)
         for cname in class_names:
             if "___" in cname:
-                crop, disease = cname.split("___")
+                crop, disease = cname.split("___", 1)
             else:
                 crop, disease = cname, "Unknown"
             all_crops.add(crop)
@@ -160,7 +177,7 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
         total = sum(stats.values()) if sum(stats.values()) > 0 else 1
         for cname, count in stats.items():
             if "___" in cname:
-                crop, disease = cname.split("___")
+                crop, disease = cname.split("___", 1)
             else:
                 crop, disease = cname, "Unknown"
             crop_counts[crop] += count
@@ -170,27 +187,67 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
         return np.concatenate([crop_ratio, disease_ratio])
 
     metadata_ratios = np.vstack([compute_ratio_vector(s) for s in client_label_stats])
+    print(f" metadata ratios shape: {metadata_ratios.shape}")
 
-    # ---- メタデータ重み自動計算 ----
+    # -----------------------------
+    # 3) PCA compress metadata (avoid very high dim)
+    # -----------------------------
+    pca_meta_dim = min(params['pca_meta_dim'], metadata_ratios.shape[1], max(1, metadata_ratios.shape[0] - 1))
+    if metadata_ratios.shape[1] > pca_meta_dim:
+        pca = PCA(n_components=pca_meta_dim, random_state=SEED)
+        meta_reduced = pca.fit_transform(metadata_ratios)
+        print(f" metadata PCA reduced to {meta_reduced.shape[1]} dims (explained {pca.explained_variance_ratio_.sum():.3f})")
+    else:
+        meta_reduced = metadata_ratios
+
+    # -----------------------------
+    # 4) compute auto metadata_weight (scale)
+    # -----------------------------
     img_var = np.var(client_features)
-    meta_var = np.var(metadata_ratios)
+    meta_var = np.var(meta_reduced)
+    metadata_weight = params.get('metadata_weight', None)
     if metadata_weight is None:
-        metadata_weight = float(np.sqrt(img_var / (meta_var + 1e-12)))
-        metadata_weight = float(np.clip(metadata_weight, 1e-3, 1e3))
-    print(f"[Auto] metadata_weight = {metadata_weight:.4f}")
+        metadata_weight = float(np.sqrt((img_var + 1e-12) / (meta_var + 1e-12)))
+        metadata_weight = float(np.clip(metadata_weight, 1e-6, 1e6))
+    print(f"[Auto] metadata_weight = {metadata_weight:.6g}")
+
+    # -----------------------------
+    # 5) standardize each modality
+    # -----------------------------
+    img_scaled = StandardScaler().fit_transform(client_features)
+    meta_scaled = StandardScaler().fit_transform(meta_reduced * metadata_weight)
+
+    # -----------------------------
+    # 6) method branches
+    # -----------------------------
+    method = params.get('method', 'distance')
+    cluster_method = params.get('cluster_method', 'spectral')
+    k_range = list(params.get('k_range', range(2, 7)))
+    alpha_grid = list(params.get('alpha_grid', [0.0, 0.25, 0.5, 0.75, 1.0]))
+    use_mds_for_visual = params.get('use_mds_for_visual', True)
+    random_state = params.get('random_state', 42)
 
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
 
-    # ---- 標準化 ----
-    img_scaled = StandardScaler().fit_transform(client_features)
-    meta_scaled = StandardScaler().fit_transform(metadata_ratios * metadata_weight)
+    metrics_out = {
+        "method": method,
+        "cluster_method": cluster_method,
+        "metadata_weight": metadata_weight,
+        "num_clients": int(num_clients),
+        "crop_list": crop_list,
+        "disease_list": disease_list,
+    }
 
-    # ---- method = concat ----
+    # -----------------------------
+    # concat method (simple)
+    # -----------------------------
     if method == "concat":
         X = np.hstack([img_scaled, meta_scaled])
+        print(f"[Concat] combined feature dim: {X.shape}")
         if cluster_method == "kmeans":
             best_k, best_labels, best_score = None, None, -np.inf
+            scores_by_k = {}
             for k in k_range:
                 kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=20).fit(X)
                 labels = kmeans.labels_
@@ -198,72 +255,122 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
                 ch = calinski_harabasz_score(X, labels)
                 db = davies_bouldin_score(X, labels)
                 combined_score = sil + ch / 1000.0 - db / 10.0
+                scores_by_k[int(k)] = {"silhouette": float(sil), "ch": float(ch), "db": float(db), "combined": float(combined_score)}
                 if combined_score > best_score:
-                    best_score, best_k, best_labels = combined_score, k, labels
-            print(f"[Concat][KMeans] best_k={best_k}, silhouette={sil:.4f}")
-
-        elif cluster_method == "hierarchical":
-            best_labels = AgglomerativeClustering(n_clusters=max(k_range), linkage='ward').fit_predict(X)
-            print(f"[Concat][Hierarchical] clusters formed: {len(np.unique(best_labels))}")
-
-        elif cluster_method == "dbscan":
-            best_labels = DBSCAN(metric='euclidean', eps=0.5, min_samples=5).fit_predict(X)
-            print(f"[Concat][DBSCAN] clusters formed: {len(np.unique(best_labels))}")
-
+                    best_score = combined_score
+                    best_k = int(k)
+                    best_labels = labels
+            metrics_out.update({"k_candidates": k_range, "k_scores": scores_by_k, "k_opt": best_k})
+            metrics_out.update({"silhouette": float(sil), "calinski_harabasz": float(ch), "davies_bouldin": float(db)})
+            with open(os.path.join(results_dir, "cluster_metrics.json"), "w") as f:
+                json.dump(metrics_out, f, indent=2)
+            visualize_clusters(X, best_labels := np.array(best_labels), title=f"Concat Clusters (k={best_k})")
+            return {cid: int(best_labels[cid]) for cid in range(num_clients)}
         else:
-            raise ValueError("Unsupported cluster_method for concat")
+            # fallback hierarchical / dbscan
+            if cluster_method == "hierarchical":
+                labels = AgglomerativeClustering(n_clusters=max(k_range), linkage='ward').fit_predict(X)
+            elif cluster_method == "dbscan":
+                labels = DBSCAN(metric='euclidean', eps=0.5, min_samples=5).fit_predict(X)
+            else:
+                raise ValueError("Unsupported cluster_method for concat")
+            visualize_clusters(X, labels, title=f"Concat Clusters ({cluster_method})")
+            return {cid: int(labels[cid]) for cid in range(num_clients)}
 
-        visualize_clusters(X, best_labels, title=f"Concat Clusters ({cluster_method})")
-        return {cid: int(best_labels[cid]) for cid in range(num_clients)}
-
-    # ---- method = distance ----
+    # -----------------------------
+    # distance fusion branch
+    # -----------------------------
     elif method == "distance":
+        # compute pairwise distances
         d_img = pairwise_distances(img_scaled, metric="euclidean")
         d_meta = pairwise_distances(meta_scaled, metric="euclidean")
-        best_alpha, best_k, best_labels, best_sil = None, None, None, -np.inf
+
+        # normalize distances to [0,1] to avoid scale domination
+        if d_img.max() > 0:
+            d_img = d_img / (d_img.max() + 1e-12)
+        if d_meta.max() > 0:
+            d_meta = d_meta / (d_meta.max() + 1e-12)
+
+        best_alpha = None
+        best_k = None
+        best_labels = None
+        best_silhouette = -np.inf
+        k_scores_by_alpha = {}
 
         for alpha in alpha_grid:
             D = alpha * d_img + (1.0 - alpha) * d_meta
-
-            if cluster_method == "spectral":
-                sigma = np.std(D) if np.std(D) > 1e-8 else 1.0
-                A = np.exp(-D / (sigma + 1e-12))
-                for k in k_range:
-                    sc = SpectralClustering(n_clusters=k, affinity="precomputed",
-                                            random_state=random_state, n_init=10)
-                    labels = sc.fit_predict(A)
-                    try:
-                        sil = silhouette_score(D, labels, metric="precomputed")
-                    except:
-                        sil = -1.0
-                    if sil > best_sil:
-                        best_sil, best_alpha, best_k, best_labels = sil, alpha, k, labels
-
-            elif cluster_method == "hierarchical":
-                for k in k_range:
-                    labels = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='average').fit_predict(D)
-                    try:
-                        sil = silhouette_score(D, labels, metric="precomputed")
-                    except:
-                        sil = -1.0
-                    if sil > best_sil:
-                        best_sil, best_alpha, best_k, best_labels = sil, alpha, k, labels
-
-            elif cluster_method == "dbscan":
-                labels = DBSCAN(metric='precomputed', eps=0.5, min_samples=5).fit_predict(D)
-                try:
-                    sil = silhouette_score(D, labels, metric="precomputed")
-                except:
-                    sil = -1.0
-                if sil > best_sil:
-                    best_sil, best_alpha, best_k, best_labels = sil, alpha, len(np.unique(labels)), labels
-
+            # compute sigma for gaussian kernel using median heuristic on D values
+            flat = D[np.triu_indices_from(D, k=1)]
+            if flat.size == 0:
+                sigma = 1.0
             else:
-                raise ValueError("Unsupported cluster_method for distance")
+                sigma = np.median(flat)
+                if sigma <= 0:
+                    sigma = np.std(flat) if np.std(flat) > 0 else 1.0
 
-        print(f"[DistanceFusion] best_alpha={best_alpha}, k={best_k}, silhouette={best_sil:.4f}")
+            # gaussian affinity (note squared distance)
+            A = np.exp(- (D ** 2) / (2.0 * (sigma ** 2 + 1e-12)))
 
-        if use_mds_for_visual:
+            scores_k = {}
+            for k in k_range:
+                labels = None
+                try:
+                    if cluster_method == "spectral":
+                        sc = SpectralClustering(n_clusters=k, affinity="precomputed", random_state=random_state, n_init=10)
+                        labels = sc.fit_predict(A)
+                    elif cluster_method == "hierarchical":
+                        # Agglomerative on distance matrix: convert to linkage via MDS embedding
+                        emb = MDS(n_components=min(params['eval_embed_dim'], max(2, img_scaled.shape[1] // 2)),
+                                  dissimilarity="precomputed", random_state=random_state).fit_transform(D)
+                        labels = AgglomerativeClustering(n_clusters=k, linkage='average').fit_predict(emb)
+                    elif cluster_method == "dbscan":
+                        labels = DBSCAN(metric='precomputed', eps=0.5, min_samples=5).fit_predict(D)
+                    elif cluster_method == "kmeans":
+                        # kmeans on concatenated embeddings as baseline
+                        emb_concat = np.hstack([img_scaled, meta_scaled])
+                        labels = KMeans(n_clusters=k, random_state=random_state, n_init=20).fit_predict(emb_concat)
+                    else:
+                        raise ValueError("Unsupported cluster_method")
+                except Exception as e:
+                    print(f"[Warning] clustering failed for alpha={alpha}, k={k}, err={e}")
+                    labels = np.array([-1] * num_clients)
+
+                # evaluate using embedding for silhouette: use MDS embedding from D
+                try:
+                    eval_emb = MDS(n_components=min(params['eval_embed_dim'], max(2, img_scaled.shape[1] // 2)),
+                                   dissimilarity="precomputed", random_state=random_state).fit_transform(D)
+                    sil = silhouette_score(eval_emb, labels)
+                    ch = calinski_harabasz_score(eval_emb, labels) if len(np.unique(labels)) > 1 else -1.0
+                    db = davies_bouldin_score(eval_emb, labels) if len(np.unique(labels)) > 1 else -1.0
+                except Exception:
+                    sil, ch, db = -1.0, -1.0, -1.0
+
+                combined_score = float(sil + (ch / 1000.0 if ch > 0 else 0.0) - (db / 10.0 if db > 0 else 0.0))
+                scores_k[int(k)] = {"silhouette": float(sil), "calinski_harabasz": float(ch), "davies_bouldin": float(db), "combined": combined_score}
+                # choose best by silhouette primarily
+                if sil > best_silhouette:
+                    best_silhouette = sil
+                    best_alpha = float(alpha)
+                    best_k = int(k)
+                    best_labels = labels
+
+            k_scores_by_alpha[float(alpha)] = scores_k
+
+        metrics_out.update({
+            "alpha_grid": alpha_grid,
+            "best_alpha": best_alpha,
+            "k_candidates": k_range,
+            "k_scores_by_alpha": k_scores_by_alpha,
+            "k_opt": int(best_k) if best_k is not None else None,
+            "silhouette": float(best_silhouette)
+        })
+        with open(os.path.join(results_dir, "cluster_metrics.json"), "w") as f:
+            json.dump(metrics_out, f, indent=2)
+
+        print(f"[DistanceFusion] best_alpha={best_alpha}, k={best_k}, silhouette={best_silhouette:.4f}")
+
+        # visualization using MDS
+        if use_mds_for_visual and best_labels is not None:
             try:
                 mds = MDS(n_components=2, dissimilarity="precomputed", random_state=random_state)
                 X2 = mds.fit_transform(best_alpha * d_img + (1.0 - best_alpha) * d_meta)
@@ -282,3 +389,24 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
 
     else:
         raise ValueError("method must be 'concat' or 'distance'")
+
+# -----------------------
+# visualization helper
+# -----------------------
+def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-SNE 2D Projection)"):
+    n = features.shape[0]
+    perp = safe_tsne_perplexity(n)
+    tsne = TSNE(n_components=2, random_state=params['random_state'], perplexity=perp)
+    reduced = tsne.fit_transform(features)
+    plt.figure(figsize=(8, 6))
+    for cluster in np.unique(cluster_ids):
+        idx = cluster_ids == cluster
+        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
+    plt.legend()
+    plt.title(title)
+    plt.xlabel("t-SNE Dim 1")
+    plt.ylabel("t-SNE Dim 2")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
+    plt.show()
