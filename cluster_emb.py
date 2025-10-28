@@ -13,6 +13,7 @@ from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.manifold import MDS, TSNE
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
 import matplotlib.pyplot as plt
+from scipy.stats import wasserstein_distance
 
 from utils import get_partitioned_data
 from config import num_clients
@@ -20,29 +21,18 @@ from config import num_clients
 # ============================================================
 # ================== パラメータ設定 =========================
 params = {
-    # --- 距離融合 ---
-    'method': 'distance',            # 特徴とメタデータを距離で融合
-    'cluster_method': 'spectral',    # 特徴距離行列に対するスペクトラルクラスタリング
-    
-    # --- クラスタ数探索 ---
-    'k_range': range(3, 10),         # クライアント数が多い場合、3〜9程度が安定
-    'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),  # 画像/メタデータ距離の重み比率を細かく探索
-    
-    # --- メタデータ重み ---
-    'metadata_weight': None,         # 自動スケーリング（画像特徴の分散に合わせて調整）
-    
-    # --- 可視化 ---
+    'method': 'distance',            
+    'cluster_method': 'spectral',    
+    'k_range': range(3, 10),         
+    'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),  
+    'metadata_weight': None,         
     'use_mds_for_visual': True,
     'mds_dim': 2,
-    
-    # --- 安定性 ---
     'random_state': 42
 }
 
-
 # ============================================================
 # ================== 乱数シード固定 =========================
-# ============================================================
 SEED = params['random_state']
 random.seed(SEED)
 np.random.seed(SEED)
@@ -55,9 +45,8 @@ torch.backends.cudnn.benchmark = False
 
 # ============================================================
 # ================== 特徴抽出関数 =========================
-# ============================================================
 def extract_features(client_id, model, device):
-    """クライアント単位で特徴を抽出"""
+    """クライアント単位で特徴を抽出（全サンプル保持）"""
     dataset, _ = get_partitioned_data(client_id, num_clients)
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
     features = []
@@ -67,46 +56,16 @@ def extract_features(client_id, model, device):
             x = x.to(device)
             feat = model(x)
             features.append(feat.cpu().numpy())
-    return np.concatenate(features, axis=0).mean(axis=0)
-
-# ============================================================
-# ================== 可視化・評価関数 ======================
-# ============================================================
-def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-SNE 2D Projection)"):
-    tsne = TSNE(n_components=2, random_state=params['random_state'], perplexity=5)
-    reduced = tsne.fit_transform(features)
-    plt.figure(figsize=(8, 6))
-    for cluster in np.unique(cluster_ids):
-        idx = cluster_ids == cluster
-        plt.scatter(reduced[idx, 0], reduced[idx, 1], label=f'Cluster {cluster}', alpha=0.7)
-    plt.legend()
-    plt.title(title)
-    plt.xlabel("t-SNE Dim 1")
-    plt.ylabel("t-SNE Dim 2")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
-    plt.show()
-
-def evaluate_clusters(features, cluster_ids, method_name="Clustering"):
-    if len(np.unique(cluster_ids)) > 1:
-        sil_score = silhouette_score(features, cluster_ids)
-        ch_score = calinski_harabasz_score(features, cluster_ids)
-        db_score = davies_bouldin_score(features, cluster_ids)
-    else:
-        sil_score, ch_score, db_score = -1, -1, -1
-    print(f"🔍 {method_name} | Silhouette={sil_score:.4f}, CH={ch_score:.2f}, DB={db_score:.4f}")
-    return sil_score, ch_score, db_score
+    return np.concatenate(features, axis=0)  # 平均はせず全サンプル保持
 
 # ============================================================
 # ================== クラスタリング関数 ====================
-# ============================================================
-
-def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
+def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use_distribution=True):
     """
     params 辞書をグローバル参照してクラスタリングを行う。
+    use_distribution=True の場合、各クライアントの特徴分布をそのまま使って
+    Wasserstein距離で距離行列を作成してクラスタリング。
     """
-    # ---- パラメータ参照 ----
     metadata_weight   = params.get('metadata_weight', None)
     method            = params.get('method', 'distance')
     cluster_method    = params.get('cluster_method', 'spectral')
@@ -117,7 +76,7 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ---- モデル準備 ----
+    # モデル準備
     if feature_extractor is None:
         from model import CNN
         model = CNN(num_classes=38)
@@ -126,14 +85,16 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
         model = feature_extractor
     model.to(device)
 
-    # ---- 画像特徴抽出 ----
-    client_features = []
+    # 画像特徴抽出
+    client_features_list = []
     for cid in range(num_clients):
         feat = extract_features(cid, model, device)
-        client_features.append(feat)
-    client_features = np.vstack(client_features)
+        client_features_list.append(feat)
 
-    # ---- メタデータ比率ベクトル ----
+    # クライアント平均ベクトル（既存手法用）
+    client_features = np.vstack([cf.mean(axis=0) for cf in client_features_list])
+
+    # メタデータ比率ベクトル
     client_label_stats = []
     all_crops, all_diseases = set(), set()
     for cid in range(num_clients):
@@ -150,10 +111,8 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
                 crop, disease = cname, "Unknown"
             all_crops.add(crop)
             all_diseases.add(disease)
-
     crop_list = sorted(list(all_crops))
     disease_list = sorted(list(all_diseases))
-
     def compute_ratio_vector(stats):
         crop_counts = defaultdict(int)
         disease_counts = defaultdict(int)
@@ -168,10 +127,9 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
         crop_ratio = np.array([crop_counts[c] / total for c in crop_list])
         disease_ratio = np.array([disease_counts[d] / total for d in disease_list])
         return np.concatenate([crop_ratio, disease_ratio])
-
     metadata_ratios = np.vstack([compute_ratio_vector(s) for s in client_label_stats])
 
-    # ---- メタデータ重み自動計算 ----
+    # メタデータ重み自動計算
     img_var = np.var(client_features)
     meta_var = np.var(metadata_ratios)
     if metadata_weight is None:
@@ -182,9 +140,57 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None):
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
 
-    # ---- 標準化 ----
+    # 標準化
     img_scaled = StandardScaler().fit_transform(client_features)
     meta_scaled = StandardScaler().fit_transform(metadata_ratios * metadata_weight)
+
+    # ==== 分布そのままの距離行列を作る手法 ====
+    if use_distribution:
+        n_clients = len(client_features_list)
+        dist_matrix = np.zeros((n_clients, n_clients))
+        for i in range(n_clients):
+            for j in range(i + 1, n_clients):
+                # 各特徴次元ごとに1D Wasserstein距離
+                wd = np.mean([wasserstein_distance(client_features_list[i][:, d],
+                                                  client_features_list[j][:, d])
+                              for d in range(client_features_list[i].shape[1])])
+                dist_matrix[i, j] = wd
+                dist_matrix[j, i] = wd
+        print("[Distribution] Wasserstein距離行列を作成")
+
+        # スペクトラルクラスタリング
+        sigma = np.std(dist_matrix) if np.std(dist_matrix) > 1e-8 else 1.0
+        affinity = np.exp(-dist_matrix / (sigma + 1e-12))
+        best_sil, best_k, best_labels = -1, None, None
+        for k in k_range:
+            sc = SpectralClustering(n_clusters=k, affinity="precomputed",
+                                    random_state=random_state, n_init=10)
+            labels = sc.fit_predict(affinity)
+            try:
+                sil = silhouette_score(dist_matrix, labels, metric="precomputed")
+            except:
+                sil = -1
+            if sil > best_sil:
+                best_sil, best_k, best_labels = sil, k, labels
+        print(f"[DistributionFusion] best_k={best_k}, silhouette={best_sil:.4f}")
+
+        if use_mds_for_visual:
+            mds = MDS(n_components=2, dissimilarity="precomputed", random_state=random_state)
+            X2 = mds.fit_transform(dist_matrix)
+            plt.figure(figsize=(8,6))
+            for cl in np.unique(best_labels):
+                idx = best_labels == cl
+                plt.scatter(X2[idx,0], X2[idx,1], label=f"Cluster {cl}", alpha=0.7)
+            plt.legend()
+            plt.title(f"DistributionFusion Spectral Clustering k={best_k}")
+            plt.show()
+
+        return {cid: int(best_labels[cid]) for cid in range(n_clients)}
+
+    # ==== 既存 distance / concat 手法 ====
+    # （ここは元の distance / concat のコードを流用）
+    # client_features = 平均ベクトル
+    # ... (略, 既存の distance / concat 処理をそのまま使える)
 
     # ---- method = concat ----
     if method == "concat":
