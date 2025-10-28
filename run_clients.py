@@ -1,5 +1,6 @@
 # run_clients_fedprox.py  （あなたの既存スクリプトをそのまま置き換える想定）
 
+# run_clients.py  （FedProx + optional pretrained ResNet + FedBN (running stats local) 対応）
 import os
 import json
 import random
@@ -19,9 +20,13 @@ import torch.nn as nn
 from flwr.client import NumPyClient
 
 # -------------------
-# FedProx ハイパーパラメータ
-# 0 にすると標準の FedAvg と等価
-FEDPROX_MU = 0.01
+# ユーザ設定（ここで切り替え）
+FEDPROX_MU = 0.01             # FedProx の μ (0.0 -> FedAvg)
+USE_PRETRAINED_BACKBONE = True   # ResNet18 を使う（ImageNet pretrain）
+BACKBONE_NAME = "resnet18" if USE_PRETRAINED_BACKBONE else "small"
+# バッチサイズは backbone に依存して小さくする（GPUメモリ節約）
+BATCH_SIZE = 16 if BACKBONE_NAME == "resnet18" else 32
+# 入力サイズの注意: resnet expects 224x224 (推奨)。 utils 側で Resize を調整してください。
 # -------------------
 
 # 乱数シード完全固定
@@ -41,8 +46,10 @@ if os.path.exists(RESULTS_BASE_DIR):
     shutil.rmtree(RESULTS_BASE_DIR)
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
+# 事前に Dirichlet 分割を作る
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
+# クラスタリング（既存コードを使う）
 if is_cluster:
     client_cluster_map = cluster_clients(num_clients=num_clients)
     #client_cluster_map = cluster_clients_with_metadata_ratio(num_clients=num_clients)
@@ -64,18 +71,21 @@ total_samples = 0
 # FLClient（FedProx対応）
 # -------------------------
 class FLClient(NumPyClient):
-    def __init__(self, cid, active_cids, mu=FEDPROX_MU):
+    def __init__(self, cid, active_cids, mu=FEDPROX_MU, backbone=BACKBONE_NAME, pretrained=USE_PRETRAINED_BACKBONE):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = CNN(num_classes=num_labels).to(self.device)
+        # Model: allow pretrained backbone option
+        self.model = CNN(num_classes=num_labels, backbone=backbone, pretrained=pretrained).to(self.device)
+        # Loss / Optimizer will be recreated per-fit
         self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
         self.mu = float(mu)
 
         if self.cid in active_cids:
             trainset, testset = get_partitioned_data(self.cid, num_clients)
-            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=0)
-            self.testloader = torch.utils.data.DataLoader(testset, batch_size=32)
+            # Note: utils.get_partitioned_data should produce images at correct size:
+            # - If using resnet18, ensure Resize((224,224)) is applied there.
+            self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+            self.testloader = torch.utils.data.DataLoader(testset, batch_size=BATCH_SIZE)
         else:
             self.trainloader = []
             self.testloader = []
@@ -84,26 +94,28 @@ class FLClient(NumPyClient):
         print(f"[Client {self.cid}] {msg}")
 
     def get_parameters(self, config):
+        # Return model parameters as numpy arrays (same ordering as set_parameters expects)
         return [val.detach().cpu().numpy() for val in self.model.parameters()]
 
     def set_parameters(self, parameters):
+        # Set model parameters from server-sent list
         for p, val in zip(self.model.parameters(), parameters):
             p.data = torch.from_numpy(val).to(self.device).to(torch.float32)
 
     def fit(self, parameters, config):
-        # グローバルパラメータをモデルにセット
+        # Set global params
         self.set_parameters(parameters)
 
-        # FedProx: "global_params" を保存（勾配計算対象外）
-        global_params = [p.detach().clone() for p in self.model.parameters()]
+        # FedProx: save global params (detached) for prox term
+        global_params = [p.detach().clone().to(self.device) for p in self.model.parameters()]
 
-        # オプティマイザ再作成（必要ならハイパラをここで変える）
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        # recreate optimizer
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
         scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.8)
 
         self.model.train()
         prev_loss = float('inf')
-        EPOCHS = 1  # 現状 1 エポック（必要なら増やす）
+        EPOCHS = 1
         for epoch in range(EPOCHS):
             running_loss = 0.0
             for data, target in self.trainloader:
@@ -112,25 +124,27 @@ class FLClient(NumPyClient):
                 output = self.model(data)
                 loss = self.criterion(output, target)
 
-                # ---------- FedProx の proximal term を追加 ----------
+                # FedProx proximal term
                 if self.mu > 0:
                     prox_term = 0.0
                     for p, g in zip(self.model.parameters(), global_params):
-                        prox_term += torch.sum((p - g.to(self.device)) ** 2)
-                    # 正規化（サンプル数やパラメータ数で割る場合はここで調整）
+                        prox_term += torch.sum((p - g) ** 2)
                     loss = loss + (self.mu / 2.0) * prox_term
-                # ----------------------------------------------------
 
                 loss.backward()
+                # optional: gradient clipping to improve stability
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
                 self.optimizer.step()
                 running_loss += loss.item()
             scheduler.step()
 
-            # Early stop-like 挙動（変化が小さければ break）
             if abs(prev_loss - running_loss) < 1e-3:
                 break
             prev_loss = running_loss
 
+        # After local training, do NOT touch BatchNorm running stats externally:
+        # By default running_mean / running_var are buffers and are not part of parameters()
+        # so they are local to this client (FedBN-like behavior).
         self.log(f"Finished local training (final loss={prev_loss:.4f}, mu={self.mu})")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -154,7 +168,7 @@ class FLClient(NumPyClient):
         return avg_loss, len(self.testloader.dataset), {"accuracy": accuracy, "loss": avg_loss}
 
 
-# Step 3: クラスタごとのFL実行ループ（以降は従来コードと同様）
+# Step 3: クラスタごとのFL実行ループ
 for cluster_id in range(num_clusters):
     selected_cids = [cid for cid, clid in client_cluster_map.items() if clid == cluster_id]
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
@@ -221,8 +235,8 @@ for cluster_id in range(num_clusters):
         real_cid = selected_cids[idx]
 
         if real_cid not in client_cache:
-            # FedProx の μ をクライアントへ渡す（ここではグローバル定数を使用）
-            client_cache[real_cid] = FLClient(real_cid, selected_cids, mu=FEDPROX_MU).to_client()
+            client_cache[real_cid] = FLClient(real_cid, selected_cids, mu=FEDPROX_MU,
+                                             backbone=BACKBONE_NAME, pretrained=USE_PRETRAINED_BACKBONE).to_client()
         return client_cache[real_cid]
 
     history = fl.simulation.start_simulation(

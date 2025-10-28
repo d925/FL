@@ -5,13 +5,23 @@ from collections import defaultdict
 import os
 import json
 from config import num_labels, alpha
+
+# ★ run_clients.py と同じフラグを config に追加しておくこと
+from config import backbone_name    # "resnet18" or "small"
+
 from PIL import Image
 import numpy as np
 import random
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
+
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset_0.1alpha"
+
+# バックボーンに応じて processed フォルダを分けると事故防止
+if backbone_name == "resnet18":
+    PROCESSED_DATA_DIR = "./processed_dataset_0.5alpha_resnet"
+else:
+    PROCESSED_DATA_DIR = "./processed_dataset_0.5alpha"
 
 
 def generate_and_save_dirichlet_partitioned_data(
@@ -19,15 +29,6 @@ def generate_and_save_dirichlet_partitioned_data(
     alpha: float = alpha,
     target_crops=None
 ):
-    """
-    PlantVillage データセットを Dirichlet 分布に基づいてクライアントに非IID分割して保存。
-
-    Args:
-        num_clients (int): クライアント数
-        alpha (float): Dirichlet 分布のパラメータ（小さいほど非IIDが強い）
-        target_crops (list[str] or None): ["Apple", "Corn", "Grape", "Tomato"] など。
-                                          None の場合は全クラスを使用。
-    """
     # =========================================================
     # 乱数シード固定
     # =========================================================
@@ -42,38 +43,32 @@ def generate_and_save_dirichlet_partitioned_data(
     torch.backends.cudnn.benchmark = False
 
     # =========================================================
-    # 既存データチェック
+    # 既存チェック
     # =========================================================
     if os.path.exists(PROCESSED_DATA_DIR):
         client_dirs = [d for d in os.listdir(os.path.join(PROCESSED_DATA_DIR, "train")) if d.startswith("client_")]
         if len(client_dirs) >= 1:
-            print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するため処理をスキップします。")
+            print(f"{PROCESSED_DATA_DIR} 内にクライアントデータが既に存在するためスキップ")
             return
 
     # =========================================================
-    # 1️⃣ データロード
+    # Load dataset
     # =========================================================
     dataset = ImageFolder(root=DATA_DIR)
     all_classes = dataset.classes
-    print(f"全クラス数: {len(all_classes)}")
 
     # =========================================================
-    # 2️⃣ 作物フィルタ（必要なら）
+    # crop filter
     # =========================================================
-# 2️⃣ 作物フィルタ（必要なら）
     if target_crops is not None:
         target_crops = set(target_crops)
         selected_classes = [cls for cls in all_classes if cls.split("___")[0] in target_crops]
-        print(f"🎯 対象作物クラス数: {len(selected_classes)} / {len(all_classes)}")
-        print(f"→ {sorted(target_crops)}")
 
-        # 該当クラスのみに限定
         selected_indices = [
             i for i, (path, label) in enumerate(dataset.samples)
             if dataset.classes[label].split("___")[0] in target_crops
         ]
 
-        # ✅ 新しいサンプル構築＋再ラベル付け
         old_to_new = {}
         new_classes = sorted(selected_classes)
         for new_idx, cls_name in enumerate(new_classes):
@@ -89,16 +84,14 @@ def generate_and_save_dirichlet_partitioned_data(
         dataset.samples = new_samples
         dataset.classes = new_classes
         dataset.class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
-
     else:
         selected_classes = all_classes
 
     num_classes = len(selected_classes)
     total_samples = len(dataset.samples)
-    print(f"最終的に使用するクラス数: {num_classes}, 画像数: {total_samples}")
 
     # =========================================================
-    # 3️⃣ クラスごとにサンプルを整理
+    # label grouping
     # =========================================================
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
@@ -109,7 +102,7 @@ def generate_and_save_dirichlet_partitioned_data(
     client_indices_per_label = {client_id: defaultdict(list) for client_id in range(num_clients)}
 
     # =========================================================
-    # 4️⃣ Dirichlet による非IID分割
+    # Dirichlet
     # =========================================================
     for label in range(num_classes):
         indices = label_to_indices[label]
@@ -117,7 +110,6 @@ def generate_and_save_dirichlet_partitioned_data(
 
         proportions = np.random.dirichlet([alpha] * num_clients)
         proportions = (proportions * len(indices)).astype(int)
-
         while proportions.sum() < len(indices):
             proportions[np.argmax(proportions)] += 1
 
@@ -125,20 +117,25 @@ def generate_and_save_dirichlet_partitioned_data(
         for client_id, count in enumerate(proportions):
             if count == 0:
                 continue
-            subset = indices[start:start + count]
+            subset = indices[start:start+count]
             client_indices[client_id].extend(subset)
             client_labels[client_id].add(label)
             client_indices_per_label[client_id][label].extend(subset)
             start += count
 
-    assigned_total = sum(len(indices) for indices in client_indices.values())
-    print(f"クライアントへの割り当て総数: {assigned_total}")
+    # =========================================================
+    # output resize rule
+    # =========================================================
+    if backbone_name == "resnet18":
+        # ResNet expected input
+        resize_transform = transforms.Resize((224, 224))
+    else:
+        # legacy small CNN
+        resize_transform = transforms.Resize((128, 128))
 
     # =========================================================
-    # 5️⃣ 各クライアントごとに train/test 分割して保存
+    # save imgs
     # =========================================================
-    transform = transforms.Resize((128, 128))
-
     for client_id in range(num_clients):
         for mode in ["train", "test"]:
             save_base = os.path.join(PROCESSED_DATA_DIR, mode, f"client_{client_id}")
@@ -147,7 +144,7 @@ def generate_and_save_dirichlet_partitioned_data(
         train_indices, test_indices = [], []
         for label, indices in client_indices_per_label[client_id].items():
             np.random.shuffle(indices)
-            split = int(0.8 * len(indices))
+            split = int(0.8*len(indices))
             train_indices.extend(indices[:split])
             test_indices.extend(indices[split:])
 
@@ -155,7 +152,7 @@ def generate_and_save_dirichlet_partitioned_data(
             for idx in subset:
                 path, label = dataset.samples[idx]
                 img = Image.open(path).convert("RGB")
-                img = transform(img)
+                img = resize_transform(img)
                 class_name = dataset.classes[label]
                 class_dir = os.path.join(base_dir, class_name)
                 os.makedirs(class_dir, exist_ok=True)
@@ -165,7 +162,7 @@ def generate_and_save_dirichlet_partitioned_data(
         save_images(test_indices, os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}"))
 
     # =========================================================
-    # 6️⃣ メタ情報保存
+    # meta info
     # =========================================================
     label_assignments = {cid: sorted(list(labels)) for cid, labels in client_labels.items()}
     label_to_clients = defaultdict(list)
@@ -181,28 +178,41 @@ def generate_and_save_dirichlet_partitioned_data(
             "label_to_clients": {str(k): v for k, v in label_to_clients.items()},
         }, f, indent=2)
 
-    print("✅ Dirichlet分割完了")
-    if target_crops:
-        print(f"→ 対象作物: {sorted(target_crops)}")
-    else:
-        print("→ 全作物を使用しました。")
-
 
 def get_partitioned_data(client_id: int, num_clients: int):
-    # 加工済みデータのフォルダ読み込み
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-    ])
+    # ---------------------------------------------------------
+    # transforms
+    # ---------------------------------------------------------
+    if backbone_name == "resnet18":
+        # Common data augmentation for pretrained backbone
+        train_transform = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485,0.456,0.406],
+                                 std=[0.229,0.224,0.225])
+        ])
+        test_transform = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485,0.456,0.406],
+                                 std=[0.229,0.224,0.225])
+        ])
+    else:
+        # legacy
+        train_transform = transforms.Compose([
+            transforms.Resize((128,128)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor()
+        ])
+        test_transform = transforms.Compose([
+            transforms.Resize((128,128)),
+            transforms.ToTensor()
+        ])
 
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-
-    
     train_dir = os.path.join(PROCESSED_DATA_DIR, "train", f"client_{client_id}")
     test_dir = os.path.join(PROCESSED_DATA_DIR, "test", f"client_{client_id}")
-    
+
     train_dataset = ImageFolder(root=train_dir, transform=train_transform)
     test_dataset = ImageFolder(root=test_dir, transform=test_transform)
 
