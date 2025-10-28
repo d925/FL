@@ -21,7 +21,7 @@ from flwr.client import NumPyClient
 
 # -------------------
 # ユーザ設定（ここで切り替え）
-FEDPROX_MU = 0.01             # FedProx の μ (0.0 -> FedAvg)
+FEDPROX_MU = 0.1             # FedProx の μ (0.0 -> FedAvg)
 USE_PRETRAINED_BACKBONE = True   # ResNet18 を使う（ImageNet pretrain）
 BACKBONE_NAME = "resnet18" if USE_PRETRAINED_BACKBONE else "small"
 # バッチサイズは backbone に依存して小さくする（GPUメモリ節約）
