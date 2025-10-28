@@ -21,7 +21,7 @@ from flwr.common.parameter import ndarrays_to_parameters, parameters_to_ndarrays
 
 # -------------------
 # FedProx ハイパーパラメータ
-FEDPROX_MU = 0.0
+FEDPROX_MU = 0.
 # Adaptive weighting hyperparams
 AWM_LR = 0.1
 AWM_ALPHA = 0.4
