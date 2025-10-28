@@ -44,8 +44,8 @@ os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 generate_and_save_dirichlet_partitioned_data(num_clients)
 
 if is_cluster:
-    client_cluster_map = cluster_clients(num_clients=num_clients)
-    #client_cluster_map = cluster_clients_with_metadata_ratio(num_clients=num_clients)
+    #client_cluster_map = cluster_clients(num_clients=num_clients)
+    client_cluster_map = cluster_clients_with_metadata_ratio(num_clients=num_clients)
     print("クラスタリング結果:")
     for cid, clust_id in client_cluster_map.items():
         print(f"クライアント {cid} は クラスター {clust_id}")
