@@ -183,7 +183,7 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
     random_state      = params.get('random_state', 42)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    n_clients = num_clients
     # モデル準備
     if feature_extractor is None:
         from model import CNN
