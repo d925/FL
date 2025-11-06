@@ -1,3 +1,4 @@
+# cluster_emb.py (patched)
 import json
 import os
 from collections import defaultdict
@@ -33,14 +34,14 @@ params = {
     'mds_dim': 2,
     'random_state': 42
 }
-# ユーザ指定：PCA後の次元 256（あなたの選択）
+# ユーザ指定（例）
 params.update({
-    'wasserstein_mode': 'sliced',
+    'wasserstein_mode': 'sliced',   # '1d' or 'sliced'
     'initial_L': 64,
     'refine_L': 192,
     'refine_topk': 6,
-    'subsample': None,
-    'pca_dim': 128,   # ← ユーザ指定
+    'subsample': None,   # None=全サンプル
+    'pca_dim': 128,      # PCA 次元（ここで変更すれば良い）
     'n_jobs': 8,
 })
 # ============================================================
@@ -85,16 +86,17 @@ def compute_sliced_wasserstein_matrix(client_features_list,
                                       refine_L=192,
                                       refine_topk=6,
                                       subsample=None,
-                                      pca_dim=256,
+                                      pca_dim=128,
                                       n_jobs=8,
                                       seed=42):
     """
     二段階Sliced Wasserstein距離行列（PCA適用済み空間で計算）を返す。
-    coarse → refine の二段階で精密化。
+    coarse -> refine の2段階。
+    戻り値: (final_dist_matrix, client_features_list_pca)
     """
     rng = np.random.RandomState(seed)
 
-    # PCA 前処理（オプション）。ここで client_features_list を PCA 後の空間に統一する。
+    # PCA 前処理（オプション）
     if pca_dim is not None:
         samples = []
         for Xi in client_features_list:
@@ -116,6 +118,7 @@ def compute_sliced_wasserstein_matrix(client_features_list,
     # coarse 投影 -> 各投影ごとのソート済み投影値を並列計算
     start_proj = time.time()
     sorted_per_proj_coarse = [None] * initial_L
+
     def job_coarse(k):
         r = np.random.RandomState(seed + 1000 + k)
         return _proj_and_sort_for_projection_local(Vs_coarse[k], client_features_list, subsample=subsample, rng=r)
@@ -155,6 +158,7 @@ def compute_sliced_wasserstein_matrix(client_features_list,
     # refinement の投影ごとのソート値を並列計算
     start_proj_ref = time.time()
     sorted_per_proj_ref = [None] * refine_L
+
     def job_ref(k):
         r = np.random.RandomState(seed + 2000 + k)
         return _proj_and_sort_for_projection_local(Vs_refine[k], client_features_list, subsample=subsample, rng=r)
@@ -188,6 +192,7 @@ def compute_sliced_wasserstein_matrix(client_features_list,
 
     return final_dist, client_features_list  # PCA後の client_features_list も返す
 
+
 # ============================================================
 # 特徴抽出関数（全サンプル保持）
 def extract_features(client_id, model, device):
@@ -202,8 +207,9 @@ def extract_features(client_id, model, device):
             features.append(feat.cpu().numpy())
     return np.concatenate(features, axis=0)
 
+
 # ============================================================
-# 可視化
+# 可視化（そのまま）
 def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-SNE 2D Projection)"):
     tsne = TSNE(n_components=2, random_state=params['random_state'], perplexity=5)
     reduced = tsne.fit_transform(features)
@@ -220,8 +226,9 @@ def visualize_clusters(features, cluster_ids, title="Client Feature Clusters (t-
     plt.savefig("cluster_plot.png", dpi=300, bbox_inches='tight')
     plt.show()
 
+
 # ============================================================
-# メイン：クラスタリング関数
+# メイン：クラスタリング関数（修正版）
 def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use_distribution=True):
     metadata_weight   = params.get('metadata_weight', None)
     method            = params.get('method', 'distance')
@@ -257,18 +264,17 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
                 refine_L=params.get('refine_L', 192),
                 refine_topk=params.get('refine_topk', 6),
                 subsample=params.get('subsample', None),
-                pca_dim=params.get('pca_dim', 256),  # PCA次元（指定どおり）
+                pca_dim=params.get('pca_dim', 128),
                 n_jobs=params.get('n_jobs', 8),
                 seed=params.get('random_state', 42)
             )
             # client_features_list は PCA 後の list[(n_i, pca_dim)]
-            # 平均特徴ベクトルも PCA後の平均に統一（重要）
+            # 平均特徴ベクトルも PCA後の平均に統一
             client_features = np.vstack([cf.mean(axis=0) for cf in client_features_list])
         else:
-            # 1D per-dim Wasserstein (legacy)。ここでも PCA をかけて次元を揃えるため PCA を適用。
+            # 1D per-dim Wasserstein (legacy) — PCA 統一
             pca_dim = params.get('pca_dim', None)
             if pca_dim is not None:
-                # fit PCA on representative samples
                 rng = np.random.RandomState(params.get('random_state', 42))
                 samples = []
                 for Xi in client_features_list_raw:
@@ -333,57 +339,64 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     metadata_ratios = np.vstack([compute_ratio_vector(s) for s in client_label_stats])
 
-    # ---------------- metadata weighting: Standardize -> weight -> distance ----------------
-    # Correct order: standardize first, then apply metadata_weight (scale)
-    meta_scaled = StandardScaler().fit_transform(metadata_ratios)  # standardized
-    # auto compute metadata_weight if None (based on PCA-mean features variance)
-    img_var = np.var(client_features)
-    meta_var = np.var(meta_scaled)
+    # ---------------- metadata weighting: Standardize -> weight -> scale ----------------
+    # Standardize meta first
+    meta_scaled = StandardScaler().fit_transform(metadata_ratios)
+    # Standardize image-means
+    img_scaled = StandardScaler().fit_transform(client_features)
+
+    # compute per-space variance summary (use mean of per-dim variances)
+    img_var = float(np.mean(np.var(img_scaled, axis=0)))
+    meta_var = float(np.mean(np.var(meta_scaled, axis=0)))
     metadata_weight = params.get('metadata_weight', None)
     if metadata_weight is None:
+        # scale meta to image variance level (statistically motivated)
         metadata_weight = float(np.sqrt((img_var + 1e-12) / (meta_var + 1e-12)))
         metadata_weight = float(np.clip(metadata_weight, 1e-3, 1e3))
-    # apply weight AFTER standardization
     meta_scaled = meta_scaled * metadata_weight
     print(f"[Auto] metadata_weight = {metadata_weight:.4f}")
 
     # ---------------- compute distance matrices ----------------
-    # client_features are PCA-means (already computed)
-    # standardize image-mean vectors BEFORE any concatenation/distance to keep consistent scaling
-    img_scaled = StandardScaler().fit_transform(client_features)
-
-    # dist_img already computed for distribution branch (Sliced/1D)
-    # dist_meta computed from meta_scaled
+    # For distribution branch: dist_img already computed
+    # For metadata:
     dist_meta = pairwise_distances(meta_scaled, metric="euclidean")
 
-    # ---------------- fusion and clustering ----------------
-    best_sil, best_alpha, best_k, best_labels = -1, None, None, None
-    for alpha in alpha_grid:
-        # unify scale: D = alpha * dist_img + (1-alpha) * dist_meta
-        D = alpha * dist_img + (1.0 - alpha) * dist_meta
-        # construct affinity for spectral
-        sigma = np.std(D) if np.std(D) > 1e-12 else 1.0
-        affinity = np.exp(-D / (sigma + 1e-12))
+    # normalize distance matrices by their std (to make them comparable)
+    eps = 1e-12
+    dist_img_std = np.std(dist_img) if np.std(dist_img) > 0 else 1.0
+    dist_meta_std = np.std(dist_meta) if np.std(dist_meta) > 0 else 1.0
+    dist_img_norm = dist_img / (dist_img_std + eps)
+    dist_meta_norm = dist_meta / (dist_meta_std + eps)
 
+    # ---------------- fusion and clustering (統計的に整合的) ----------------
+    best_sil, best_alpha, best_k, best_labels = -1.0, None, None, None
+    for alpha in alpha_grid:
+        # fused distance (unitless, normalized)
+        D_fused = alpha * dist_img_norm + (1.0 - alpha) * dist_meta_norm
+
+        # convert fused distance to affinity using formal RBF: exp(-D^2 / (2 * sigma^2))
+        sigma_final = np.std(D_fused) if np.std(D_fused) > 1e-12 else 1.0
+        affinity = np.exp(- (D_fused ** 2) / (2.0 * (sigma_final ** 2) + eps))
+
+        # spectral clustering on affinity
         for k in k_range:
             sc = SpectralClustering(n_clusters=k, affinity="precomputed", random_state=random_state, n_init=10)
             labels = sc.fit_predict(affinity)
-            # Evaluate clustering using MDS embedding of D (distance space) so silhouette is computed consistently
+            # Evaluate clustering using silhouette on fused distance (precomputed)
             try:
-                n_components = min(10, max(2, img_scaled.shape[1] // 2))
-                eval_emb = MDS(n_components=n_components, dissimilarity="precomputed", random_state=random_state).fit_transform(D)
-                sil = silhouette_score(eval_emb, labels)
+                sil = silhouette_score(D_fused, labels, metric='precomputed')
             except Exception:
                 sil = -1.0
             if sil > best_sil:
-                best_sil, best_alpha, best_k, best_labels = sil, alpha, k, labels
+                best_sil, best_alpha, best_k, best_labels = float(sil), float(alpha), int(k), labels.copy()
+                print(f"[BestUpdate] alpha={best_alpha}, k={best_k}, silhouette={best_sil:.4f}")
 
     print(f"[Distribution+MetadataFusion] best_alpha={best_alpha}, best_k={best_k}, silhouette={best_sil:.4f}")
 
     # optional: visualize using MDS on best D
     if use_mds_for_visual and best_labels is not None:
         try:
-            D_best = best_alpha * dist_img + (1.0 - best_alpha) * dist_meta
+            D_best = best_alpha * dist_img_norm + (1.0 - best_alpha) * dist_meta_norm
             mds = MDS(n_components=2, dissimilarity="precomputed", random_state=random_state)
             X2 = mds.fit_transform(D_best)
             plt.figure(figsize=(8, 6))
@@ -392,7 +405,8 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
                 plt.scatter(X2[idx, 0], X2[idx, 1], label=f"Cluster {cl}", alpha=0.7)
             plt.legend()
             plt.title(f"Distribution+Metadata Fusion alpha={best_alpha}, k={best_k}")
-            plt.savefig(os.path.join("results", "distancefusion_plot.png"), dpi=300, bbox_inches="tight")
+            os.makedirs("results", exist_ok=True)
+            plt.savefig(os.path.join("results", "distancefusion_plot.png"), dpi=300, bbox_inches='tight')
             plt.show()
         except Exception as e:
             print("[Warning] MDS visualization failed:", e)
