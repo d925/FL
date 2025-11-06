@@ -35,14 +35,15 @@ params = {
     'random_state': 42
 }
 params.update({
-    'wasserstein_mode': 'sliced',  # '1d' or 'sliced'
-    'L': 64,                       # sliced projection count
-    'subsample': 800,              # subsample per client (None=use all)
-    'pca_dim': 64,                 # reduce dimension for speed (None=keep)
-    'n_jobs': 8                    # CPU parallel workers
+    'wasserstein_mode': 'sliced',
+    'initial_L': 64,
+    'refine_L': 192,
+    'refine_topk': 6,
+    'subsample': None,   # None で全サンプルを使う。重いなら 800 等
+    'pca_dim': 64,
+    'n_jobs': 8,
 })
-
-# ============================================================
+#======================================================
 # ================== 乱数シード固定 =========================
 SEED = params['random_state']
 random.seed(SEED)
@@ -54,7 +55,8 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-def _proj_and_sort_for_projection(k, v, client_features_list, subsample=None, rng=None):
+def _proj_and_sort_for_projection_local(v, client_features_list, subsample=None, rng=None):
+    """単一射影ベクトル v に対して、各クライアントの投影値（ソート済）を返す。"""
     sorted_vals = []
     for Xi in client_features_list:
         if subsample is not None and Xi.shape[0] > subsample:
@@ -67,27 +69,46 @@ def _proj_and_sort_for_projection(k, v, client_features_list, subsample=None, rn
         sorted_vals.append(proj)
     return sorted_vals
 
-def _sliced_wasserstein_pairwise(sorted_vals):
+def _sliced_wasserstein_pairwise_from_proj_local(sorted_vals):
+    """1投影分のクライアント間WD行列を返す（対称）。"""
     n = len(sorted_vals)
     M = np.zeros((n, n), dtype=np.float32)
     for i in range(n):
         xi = sorted_vals[i]
-        for j in range(i + 1, n):
+        for j in range(i+1, n):
             xj = sorted_vals[j]
             M[i, j] = M[j, i] = wasserstein_distance(xi, xj)
     return M
 
 def compute_sliced_wasserstein_matrix(client_features_list,
-                                      L=64,
+                                      initial_L=64,
+                                      refine_L=192,
+                                      refine_topk=6,
                                       subsample=None,
-                                      pca_dim=None,
+                                      pca_dim=64,
                                       n_jobs=8,
                                       seed=42):
+    """
+    二段階Sliced Wasserstein距離行列を返す。
+    1) initial_L投影で粗い距離行列を作る（全ペア）
+    2) 各クライアントについて近い/微妙な refine_topk ペアを選び、
+       追加の refine_L 投影でそのペアを精密化（再計算）する
+
+    Parameters:
+      client_features_list: list of arrays (n_i, d)
+      initial_L: coarse 投影数
+      refine_L: refine 時の追加投影数
+      refine_topk: 各クライアントごとに精密化する相手数（片側 topk）
+      subsample: サブサンプル数（None は全部）
+      pca_dim: PCA次元（None は無効）
+      n_jobs: 並列ワーカー数（projection 単位）
+      seed: RNG seed
+    """
     rng = np.random.RandomState(seed)
 
-    # PCA
+    # ---- PCA 前処理（オプション） ----
     if pca_dim is not None:
-        # sample small subset for PCA fit
+        # PCA 学習用の代表サンプルを作る（メモリ配慮）
         samples = []
         for Xi in client_features_list:
             take = min(Xi.shape[0], 500)
@@ -101,37 +122,93 @@ def compute_sliced_wasserstein_matrix(client_features_list,
     n_clients = len(client_features_list)
     d = client_features_list[0].shape[1]
 
-    # create random projections
-    Vs = rng.normal(size=(L, d)).astype(np.float32)
-    Vs /= np.linalg.norm(Vs, axis=1, keepdims=True) + 1e-12
+    # ---- ヘルパ: 投影群作成（ユニットベクトル） ----
+    Vs_coarse = rng.normal(size=(initial_L, d)).astype(np.float32)
+    Vs_coarse /= np.linalg.norm(Vs_coarse, axis=1, keepdims=True) + 1e-12
 
-    # sort projection values for all clients (parallel)
-    sorted_per_proj = [None] * L
+    # ---- coarse: 各投影でソート値を計算（並列） ----
+    start_proj = time.time()
+    sorted_per_proj_coarse = [None] * initial_L
 
-    def job(k):
-        r = np.random.RandomState(seed + k)
-        return _proj_and_sort_for_projection(k, Vs[k], client_features_list,
-                                             subsample=subsample, rng=r)
+    def job_coarse(k):
+        r = np.random.RandomState(seed + 1000 + k)
+        return _proj_and_sort_for_projection_local(Vs_coarse[k], client_features_list, subsample=subsample, rng=r)
 
-    start = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_jobs, L)) as exe:
-        futures = {exe.submit(job, k): k for k in range(L)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_jobs, initial_L)) as exe:
+        futures = {exe.submit(job_coarse, k): k for k in range(initial_L)}
         for fut in concurrent.futures.as_completed(futures):
             k = futures[fut]
-            sorted_per_proj[k] = fut.result()
-    proj_time = time.time() - start
+            sorted_per_proj_coarse[k] = fut.result()
+    proj_coarse_time = time.time() - start_proj
 
-    # accumulate pairwise WD
-    start = time.time()
-    dist = np.zeros((n_clients, n_clients), dtype=np.float64)
-    for k in range(L):
-        dist += _sliced_wasserstein_pairwise(sorted_per_proj[k])
-    dist /= float(L)
-    wd_time = time.time() - start
+    # ---- coarse: 投影ごとにWDを計算して平均（全ペア） ----
+    start_pair_coarse = time.time()
+    dist_coarse = np.zeros((n_clients, n_clients), dtype=np.float64)
+    for k in range(initial_L):
+        dist_coarse += _sliced_wasserstein_pairwise_from_proj_local(sorted_per_proj_coarse[k])
+    dist_coarse /= float(initial_L)
+    pair_coarse_time = time.time() - start_pair_coarse
 
-    print(f"[SlicedW] projection_time={proj_time:.2f}s, pairwise_time={wd_time:.2f}s")
-    return dist
+    # ---- pick candidate pairs for refinement ----
+    # 戻り値は symmetric matrix; 各クライアント i について最小距離の topk を選ぶ
+    topk = max(1, int(refine_topk))
+    candidate_pairs = set()
+    for i in range(n_clients):
+        # distances (i, :) sorted ascending excluding self
+        dists = dist_coarse[i].copy()
+        dists[i] = np.inf
+        # get topk smallest (closest) indices
+        idxs = np.argpartition(dists, topk)[:topk]
+        for j in idxs:
+            a, b = (i, j) if i < j else (j, i)
+            candidate_pairs.add((a, b))
+    candidate_pairs = sorted(candidate_pairs)
+    n_candidates = len(candidate_pairs)
 
+    # ---- refinement: 追加投影ベクトル作成 ----
+    Vs_refine = rng.normal(size=(refine_L, d)).astype(np.float32)
+    Vs_refine /= np.linalg.norm(Vs_refine, axis=1, keepdims=True) + 1e-12
+
+    # ---- refinement: 各投影でソート値を計算（再利用可能部分のみ） ----
+    # we can reuse coarse sorted values for coarse projections if we want; here we compute new projections only
+    start_proj_ref = time.time()
+    sorted_per_proj_ref = [None] * refine_L
+    def job_ref(k):
+        r = np.random.RandomState(seed + 2000 + k)
+        return _proj_and_sort_for_projection_local(Vs_refine[k], client_features_list, subsample=subsample, rng=r)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_jobs, refine_L)) as exe:
+        futures = {exe.submit(job_ref, k): k for k in range(refine_L)}
+        for fut in concurrent.futures.as_completed(futures):
+            k = futures[fut]
+            sorted_per_proj_ref[k] = fut.result()
+    proj_ref_time = time.time() - start_proj_ref
+
+    # ---- refinement: 各 candidate pair について、refine投影分の平均WDを計算して coarse とブレンド ----
+    # compute pairwise WD for candidate pairs using only refine projections
+    start_pair_ref = time.time()
+    # build a dict of pair -> refined_wd (float)
+    refined_wd = {}
+    for a, b in candidate_pairs:
+        acc = 0.0
+        for k in range(refine_L):
+            xi = sorted_per_proj_ref[k][a]
+            xj = sorted_per_proj_ref[k][b]
+            acc += wasserstein_distance(xi, xj)
+        refined_wd[(a, b)] = (acc / float(refine_L))
+    pair_ref_time = time.time() - start_pair_ref
+
+    # ---- combine: replace coarse distances for candidate pairs with weighted average (or use refined directly) ----
+    # here we set final_dist[a,b] = (coarse + refined) / 2  (simple blending), but you can set to refined_wd directly
+    final_dist = dist_coarse.copy()
+    for (a, b), w in refined_wd.items():
+        final_dist[a, b] = final_dist[b, a] = (final_dist[a, b] + w) / 2.0
+
+    # ---- log summary ----
+    total_time = proj_coarse_time + pair_coarse_time + proj_ref_time + pair_ref_time
+    print(f"[SlicedW-multiscale] proj_coarse={proj_coarse_time:.2f}s, pair_coarse={pair_coarse_time:.2f}s, proj_ref={proj_ref_time:.2f}s, pair_ref={pair_ref_time:.2f}s, candidates={n_candidates}, total={total_time:.2f}s")
+
+    return final_dist
 # ============================================================
 # ================== 特徴抽出関数 =========================
 def extract_features(client_id, model, device):
@@ -276,9 +353,11 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
             start_time = time.time()
             dist_img = compute_sliced_wasserstein_matrix(
                 client_features_list,
-                L=params.get('L', 64),
+                initial_L=params.get('initial_L', 64),
+                refine_L=params.get('refine_L', 192),
+                refine_topk=params.get('refine_topk', 6),
                 subsample=params.get('subsample', None),
-                pca_dim=params.get('pca_dim', None),
+                pca_dim=params.get('pca_dim', 64),
                 n_jobs=params.get('n_jobs', 8),
                 seed=params.get('random_state', 42)
             )
