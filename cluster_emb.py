@@ -12,6 +12,10 @@ from sklearn.metrics import pairwise_distances
 from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.manifold import MDS, TSNE
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
+import time
+import concurrent.futures
+from scipy.stats import wasserstein_distance
+from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from scipy.stats import wasserstein_distance
 
@@ -30,6 +34,13 @@ params = {
     'mds_dim': 2,
     'random_state': 42
 }
+params.update({
+    'wasserstein_mode': 'sliced',  # '1d' or 'sliced'
+    'L': 64,                       # sliced projection count
+    'subsample': 800,              # subsample per client (None=use all)
+    'pca_dim': 64,                 # reduce dimension for speed (None=keep)
+    'n_jobs': 8                    # CPU parallel workers
+})
 
 # ============================================================
 # ================== 乱数シード固定 =========================
@@ -42,6 +53,84 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+
+def _proj_and_sort_for_projection(k, v, client_features_list, subsample=None, rng=None):
+    sorted_vals = []
+    for Xi in client_features_list:
+        if subsample is not None and Xi.shape[0] > subsample:
+            idx = rng.choice(Xi.shape[0], size=subsample, replace=False)
+            Xi_use = Xi[idx]
+        else:
+            Xi_use = Xi
+        proj = Xi_use.dot(v)
+        proj.sort()
+        sorted_vals.append(proj)
+    return sorted_vals
+
+def _sliced_wasserstein_pairwise(sorted_vals):
+    n = len(sorted_vals)
+    M = np.zeros((n, n), dtype=np.float32)
+    for i in range(n):
+        xi = sorted_vals[i]
+        for j in range(i + 1, n):
+            xj = sorted_vals[j]
+            M[i, j] = M[j, i] = wasserstein_distance(xi, xj)
+    return M
+
+def compute_sliced_wasserstein_matrix(client_features_list,
+                                      L=64,
+                                      subsample=None,
+                                      pca_dim=None,
+                                      n_jobs=8,
+                                      seed=42):
+    rng = np.random.RandomState(seed)
+
+    # PCA
+    if pca_dim is not None:
+        # sample small subset for PCA fit
+        samples = []
+        for Xi in client_features_list:
+            take = min(Xi.shape[0], 500)
+            idx = rng.choice(Xi.shape[0], size=take, replace=False)
+            samples.append(Xi[idx])
+        concat = np.vstack(samples)
+        pca = PCA(n_components=pca_dim, random_state=seed)
+        pca.fit(concat)
+        client_features_list = [pca.transform(X) for X in client_features_list]
+
+    n_clients = len(client_features_list)
+    d = client_features_list[0].shape[1]
+
+    # create random projections
+    Vs = rng.normal(size=(L, d)).astype(np.float32)
+    Vs /= np.linalg.norm(Vs, axis=1, keepdims=True) + 1e-12
+
+    # sort projection values for all clients (parallel)
+    sorted_per_proj = [None] * L
+
+    def job(k):
+        r = np.random.RandomState(seed + k)
+        return _proj_and_sort_for_projection(k, Vs[k], client_features_list,
+                                             subsample=subsample, rng=r)
+
+    start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_jobs, L)) as exe:
+        futures = {exe.submit(job, k): k for k in range(L)}
+        for fut in concurrent.futures.as_completed(futures):
+            k = futures[fut]
+            sorted_per_proj[k] = fut.result()
+    proj_time = time.time() - start
+
+    # accumulate pairwise WD
+    start = time.time()
+    dist = np.zeros((n_clients, n_clients), dtype=np.float64)
+    for k in range(L):
+        dist += _sliced_wasserstein_pairwise(sorted_per_proj[k])
+    dist /= float(L)
+    wd_time = time.time() - start
+
+    print(f"[SlicedW] projection_time={proj_time:.2f}s, pairwise_time={wd_time:.2f}s")
+    return dist
 
 # ============================================================
 # ================== 特徴抽出関数 =========================
@@ -165,17 +254,40 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     # ==== 分布そのままの距離行列を作る手法 ====
     if use_distribution:
-        n_clients = len(client_features_list)
-        dist_img = np.zeros((n_clients, n_clients))
-        for i in range(n_clients):
-            for j in range(i + 1, n_clients):
-                wd = np.mean([wasserstein_distance(client_features_list[i][:, d],
-                                                client_features_list[j][:, d])
-                            for d in range(client_features_list[i].shape[1])])
-                dist_img[i, j] = wd
-                dist_img[j, i] = wd
-        print("[Distribution] Wasserstein距離行列を作成")
+        wasser_mode = params.get('wasserstein_mode', '1d')
 
+        if wasser_mode == '1d':
+            print("[Distribution] Using original 1D Wasserstein")
+            start_time = time.time()
+            n_clients = len(client_features_list)
+            dist_img = np.zeros((n_clients, n_clients))
+            for i in range(n_clients):
+                for j in range(i + 1, n_clients):
+                    wd = np.mean([
+                        wasserstein_distance(client_features_list[i][:, d],
+                                            client_features_list[j][:, d])
+                        for d in range(client_features_list[i].shape[1])
+                    ])
+                    dist_img[i, j] = dist_img[j, i] = wd
+            print(f"[1DWD] elapsed={time.time() - start_time:.2f}s")
+
+        elif wasser_mode == 'sliced':
+            print("[Distribution] Using Sliced Wasserstein")
+            start_time = time.time()
+            dist_img = compute_sliced_wasserstein_matrix(
+                client_features_list,
+                L=params.get('L', 64),
+                subsample=params.get('subsample', None),
+                pca_dim=params.get('pca_dim', None),
+                n_jobs=params.get('n_jobs', 8),
+                seed=params.get('random_state', 42)
+            )
+            print(f"[SlicedWD] total_elapsed={time.time() - start_time:.2f}s")
+
+        else:
+            raise ValueError("wasserstein_mode must be '1d' or 'sliced'")
+
+        print("[Distribution] Wasserstein距離行列を作成")
         # メタデータ距離行列
         dist_meta = pairwise_distances(metadata_ratios * metadata_weight, metric="euclidean")
 
