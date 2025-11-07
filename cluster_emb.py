@@ -29,7 +29,7 @@ params = {
     'cluster_method': 'spectral',
     'k_range': range(3, 10),
     'alpha_grid': np.linspace(0.2, 0.8, 7).tolist(),
-    'metadata_weight': None,
+    'metadata_weight': 0.5,
     'use_mds_for_visual': True,
     'mds_dim': 2,
     'random_state': 42
