@@ -41,7 +41,7 @@ params.update({
     'refine_L': 192,
     'refine_topk': 6,
     'subsample': None,   # None=全サンプル
-    'pca_dim': 128,      # PCA 次元（ここで変更すれば良い）
+    'pca_dim': 256,      # PCA 次元（ここで変更すれば良い）
     'n_jobs': 8,
 })
 # ============================================================
