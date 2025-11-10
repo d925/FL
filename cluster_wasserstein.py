@@ -46,6 +46,7 @@ params = {
 
     # metadata scaling
     "metadata_weight": None,
+    "max_cluster_size": 20,
 }
 
 
@@ -291,6 +292,8 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
     best_sil = -1
     best = {}
 
+    max_allowed = params.get("max_cluster_size", None)
+
     for a in params["alpha_grid"]:
         D = a * dist_img_n + (1-a) * dist_meta_n
         sigma = np.std(D) or 1.0
@@ -306,6 +309,14 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
                 sil = silhouette_score(D, labels, metric="precomputed")
             except Exception:
                 sil = -1
+
+            # ===== クラスタ人数チェック =====
+            if max_allowed is not None:
+                _, counts = np.unique(labels, return_counts=True)
+                max_size = np.max(counts)
+                if max_size > max_allowed:
+                    # どデカいクラスタは門前払い
+                    continue
 
             if sil > best_sil:
                 best_sil = sil
