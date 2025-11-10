@@ -21,7 +21,7 @@ from flwr.client import NumPyClient
 # -------------------
 # FedProx ハイパーパラメータ
 # 0 にすると標準の FedAvg と等価
-FEDPROX_MU = 0.1
+FEDPROX_MU = 0.5
 # -------------------
 
 # 乱数シード完全固定
