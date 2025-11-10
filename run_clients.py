@@ -21,7 +21,7 @@ from flwr.client import NumPyClient
 # -------------------
 # FedProx ハイパーパラメータ
 # 0 にすると標準の FedAvg と等価
-FEDPROX_MU = 0.1
+FEDPROX_MU = 0.01
 # -------------------
 
 # 乱数シード完全固定
@@ -69,7 +69,7 @@ class FLClient(NumPyClient):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CNN(num_classes=num_labels).to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001)
         self.mu = float(mu)
 
         if self.cid in active_cids:
