@@ -41,7 +41,7 @@ params = {
     "refine_L": 192,
     "refine_topk": 6,
     "subsample": None,
-    "pca_dim": 256,        # PCA次元 統一
+    "pca_dim": 64,        # PCA次元 統一
     "n_jobs": 8,
 
     # metadata scaling
