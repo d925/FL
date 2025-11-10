@@ -30,7 +30,7 @@ params = {
     "method": "distance",
     "cluster_method": "spectral",
     "k_range": list(range(3, 10)),
-    "alpha_grid": np.linspace(0).tolist(),
+    "alpha_grid": [0.0],
     "use_mds_for_visual": True,
     "mds_dim": 2,
     "random_state": 42,
