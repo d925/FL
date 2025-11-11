@@ -238,47 +238,11 @@ for cluster_id in range(num_clusters):
     examples = cluster_results.get("samples", 0)
     correct = cluster_results.get("correct", 0.0)
 
-
-    print(f"\n🎯 Fine-tuning Cluster {cluster_id} クライアントモデル開始")
-
-    finetune_epochs = 1  # 必要なら増やして
-    lr_ft = 0.0005       # 小さめ学習率
-    ft_results = {}
-
-    for cid in selected_cids:
-        client = FLClient(cid, selected_cids, mu=0.0)  # fine-tuneはFedProx無効
-        client.set_parameters(history.global_parameters)
-
-        client.model.train()
-        optimizer = optim.SGD(client.model.parameters(), lr=lr_ft, momentum=0.9)
-
-        for epoch in range(finetune_epochs):
-            for data, target in client.trainloader:
-                data, target = data.to(client.device), target.to(client.device)
-                optimizer.zero_grad()
-                output = client.model(data)
-                loss = client.criterion(output, target)
-                loss.backward()
-                optimizer.step()
-
-        # 評価
-        loss_ft, num_ft, metrics_ft = client.evaluate(client.get_parameters({}), {})
-        ft_results[cid] = metrics_ft["accuracy"]
-        print(f"  Client {cid}: FT-Acc={metrics_ft['accuracy']*100:.2f}%")
-
-    # Fine-tune後の平均
-    avg_ft_acc = float(np.mean(list(ft_results.values())))
-    print(
-        f"✅ Cluster {cluster_id} Fine-tune AVG Acc: "
-        f"{avg_ft_acc*100:.2f}%"
-    )
-
     final_cluster_metrics[f"cluster_{cluster_id}"] = {
         "final_accuracy": acc,
         "final_loss": loss,
         "samples": examples,
         "correct": correct,
-        "finetuned_accuracy": avg_ft_acc,
     }
 
     total_correct += correct
