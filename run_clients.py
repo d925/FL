@@ -268,7 +268,6 @@ for cluster_id in range(num_clusters):
 
     # Fine-tune後の平均
     avg_ft_acc = float(np.mean(list(ft_results.values())))
-    final_cluster_metrics[f"cluster_{cluster_id}"]["finetune_accuracy"] = avg_ft_acc
     print(
         f"✅ Cluster {cluster_id} Fine-tune AVG Acc: "
         f"{avg_ft_acc*100:.2f}%"
