@@ -30,7 +30,7 @@ params = {
     "method": "distance",
     "cluster_method": "spectral",
     "k_range": list(range(3, 10)),
-    "alpha_grid": [0.4],
+    "alpha_grid": [0.4,0.5],
     "use_mds_for_visual": True,
     "mds_dim": 2,
     "random_state": 1,
