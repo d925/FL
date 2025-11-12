@@ -25,7 +25,7 @@ FEDPROX_MU = 0.1
 # -------------------
 
 # 乱数シード完全固定
-SEED = 42
+SEED = 0
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -42,6 +42,8 @@ if os.path.exists(RESULTS_BASE_DIR):
 os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
 
 generate_and_save_dirichlet_partitioned_data(num_clients)
+
+
 
 if is_cluster:
     #client_cluster_map = cluster_clients(num_clients=num_clients)
@@ -160,9 +162,16 @@ for cluster_id in range(num_clusters):
     print(f"\n--- クラスタ {cluster_id} のシミュレーション開始 ---")
 
     cluster_results = {}
+    round_counter = 0  # aggregate_metrics の外にグローバル変数で追加
 
+
+    
     def aggregate_metrics(results):
-        print("\n📊 このラウンドのクライアント評価結果:")
+        global round_counter
+        round_counter += 1  # ← ラウンド番号カウント
+
+        print(f"\n📊 第 {round_counter} ラウンドのクライアント評価結果:")
+
         weighted_sum_acc, weighted_sum_loss, total_weight = 0.0, 0.0, 0.0
         total_examples = 0
 
@@ -179,18 +188,23 @@ for cluster_id in range(num_clusters):
         avg_accuracy = weighted_sum_acc / total_weight
         avg_loss = weighted_sum_loss / total_weight
 
+        cluster_results.setdefault("round_accuracies", []).append(avg_accuracy)
+        cluster_results.setdefault("round_losses", []).append(avg_loss)
+
         cluster_results["accuracy"] = avg_accuracy
         cluster_results["loss"] = avg_loss
         cluster_results["samples"] = total_examples
         cluster_results["correct"] = avg_accuracy * total_examples
 
-        print(f"➡️ ラウンド全体の精度: {avg_accuracy * 100:.2f}%\n")
+        print(f"➡️ 第 {round_counter} ラウンドの平均精度: {avg_accuracy * 100:.2f}%\n")
 
+        # ファイル保存
         output_dir = os.path.join(RESULTS_BASE_DIR, f"cluster_{cluster_id}")
         os.makedirs(output_dir, exist_ok=True)
         summary_file = os.path.join(output_dir, "round_metrics.jsonl")
 
         round_summary = {
+            "round": round_counter,
             "accuracy": avg_accuracy,
             "loss": avg_loss,
             "samples": total_examples,
