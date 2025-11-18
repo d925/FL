@@ -33,7 +33,7 @@ params = {
     "alpha_grid": [0.4,0.5,0.6],
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 44,
+    "random_state": 5,
 
     # distribution similarity (Sliced WD)
     "wasserstein_mode": "sliced",
