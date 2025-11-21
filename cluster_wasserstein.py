@@ -29,13 +29,13 @@ params = {
     "method": "distance",
     "cluster_method": "spectral",
     "k_range": list(range(3, 10)),
-    "alpha_grid": [0.0, 0.1, 0.3, 0.5, 0.7, 1.0],  # include endpoints
+    "alpha_grid": [0.0, 0.1, 0.3, 0.5, 0.7],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
     "random_state": 0,
 
     # fusion selection: "distance" or "kernel"
-    "fusion_mode": "distance",
+    "fusion_mode": "kernel",
 
     # distribution similarity (Sliced WD)
     "wasserstein_mode": "sliced",
@@ -48,7 +48,7 @@ params = {
 
     # metadata scaling
     "metadata_weight": None,
-    "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
+    "max_cluster_size": 20,  # None: no restriction, or int to limit largest cluster
 }
 
 # fix seeds
