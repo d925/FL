@@ -47,8 +47,8 @@ params = {
     "n_jobs": 8,
 
     # metadata scaling
-    "metadata_weight": 100.0,
-    "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
+    "metadata_weight": None,
+    "max_cluster_size": 20,  # None: no restriction, or int to limit largest cluster
 }
 
 # fix seeds
@@ -371,7 +371,7 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
                 max_size = np.max(counts)
                 if max_size > max_allowed:
                     continue
-                
+
             if sil > best_sil:
                 best_sil = sil
                 best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
