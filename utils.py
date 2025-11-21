@@ -11,7 +11,7 @@ import random
 
 LABEL_ASSIGN_PATH = "label_assignments.json"
 DATA_DIR = "./Plant_leave_diseases_dataset_with_augmentation"
-PROCESSED_DATA_DIR = "./processed_dataset_0.1alpha_1"
+PROCESSED_DATA_DIR = "./processed_dataset_0.1alpha_2"
 
 
 def generate_and_save_dirichlet_partitioned_data(
@@ -31,7 +31,7 @@ def generate_and_save_dirichlet_partitioned_data(
     # =========================================================
     # 乱数シード固定
     # =========================================================
-    SEED = 1
+    SEED = 2
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
