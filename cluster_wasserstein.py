@@ -331,6 +331,8 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     best_sil = -np.inf
     best = None
+    max_allowed = params.get("max_cluster_size", None)
+
 
     # === Step 6: Grid search over α and cluster count ===
     for a in params["alpha_grid"]:
@@ -364,7 +366,12 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
                 sil = silhouette_score(D, labels, metric="precomputed")
             except Exception:
                 sil = -1.0
-
+            if max_allowed is not None:
+                _, counts = np.unique(labels, return_counts=True)
+                max_size = np.max(counts)
+                if max_size > max_allowed:
+                    continue
+                
             if sil > best_sil:
                 best_sil = sil
                 best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
