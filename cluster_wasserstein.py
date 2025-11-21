@@ -1,4 +1,4 @@
-# cluster_emb.py (params fully unified)
+# cluster_emb.py (params fully unified; distance/kernel fusion selectable)
 import json
 import os
 from collections import defaultdict
@@ -21,7 +21,6 @@ import matplotlib.pyplot as plt
 from utils import get_partitioned_data
 from config import num_clients
 
-
 # ============================================================
 # ✅ パラメータ 100% 一元管理
 # ============================================================
@@ -30,10 +29,13 @@ params = {
     "method": "distance",
     "cluster_method": "spectral",
     "k_range": list(range(3, 10)),
-    "alpha_grid": [0.3,0.4,0.5,0.6,0.7],
+    "alpha_grid": [0.0, 0.1, 0.3, 0.5, 0.7, 1.0],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 9,
+    "random_state": 0,
+
+    # fusion selection: "distance" or "kernel"
+    "fusion_mode": "distance",
 
     # distribution similarity (Sliced WD)
     "wasserstein_mode": "sliced",
@@ -46,9 +48,8 @@ params = {
 
     # metadata scaling
     "metadata_weight": None,
-    "max_cluster_size": 20,
+    "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
 }
-
 
 # fix seeds
 SEED = params["random_state"]
@@ -59,7 +60,6 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-
 
 # ============================================================
 # Sliced WD utilities
@@ -72,6 +72,7 @@ def _proj_and_sort_for_projection_local(v, client_features_list, subsample=None,
             Xi_use = Xi[idx]
         else:
             Xi_use = Xi
+        # v is shape (d,), Xi_use (n, d)
         proj = Xi_use.dot(v)
         proj.sort()
         sorted_vals.append(proj)
@@ -99,6 +100,13 @@ def compute_sliced_wasserstein_matrix(
     n_jobs,
     seed,
 ):
+    """
+    二段階 Sliced Wasserstein (coarse -> refine)。
+    入力 client_features_list は各クライアントの (n_i, D_orig) 配列のリスト。
+    戻り値:
+      final_distance_matrix (n_clients, n_clients),
+      client_features_list_pca: PCA後の各クライアント特徴リスト（対応する平均ベクトルはこれから作る）
+    """
     rng = np.random.RandomState(seed)
 
     # PCA space unify
@@ -135,10 +143,10 @@ def compute_sliced_wasserstein_matrix(
     dist_coarse = np.zeros((n_clients, n_clients))
     for k in range(initial_L):
         dist_coarse += _sliced_wasserstein_pairwise_from_proj_local(sorted_vals_coarse[k])
-    dist_coarse /= initial_L
+    dist_coarse /= float(initial_L)
     print(f"[coarse SWD] {time.time() - start:.1f}s")
 
-    # refine pairs
+    # pick refine candidate pairs (topk per client)
     topk = max(1, refine_topk)
     candidates = set()
     for i in range(n_clients):
@@ -150,7 +158,7 @@ def compute_sliced_wasserstein_matrix(
             candidates.add((a, b))
     candidates = sorted(candidates)
 
-    # refine
+    # refine directions
     Vs_refine = rng.normal(size=(refine_L, d))
     Vs_refine /= np.linalg.norm(Vs_refine, axis=1, keepdims=True) + 1e-12
 
@@ -171,7 +179,7 @@ def compute_sliced_wasserstein_matrix(
         acc = 0.0
         for k in range(refine_L):
             acc += wasserstein_distance(sorted_vals_ref[k][a], sorted_vals_ref[k][b])
-        refined[(a, b)] = acc / refine_L
+        refined[(a, b)] = acc / float(refine_L)
 
     final = dist_coarse.copy()
     for (a, b), w in refined.items():
@@ -200,7 +208,13 @@ def extract_features(client_id, model, device):
 # main clustering
 # ============================================================
 def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use_distribution=True):
-
+    """
+    メイン関数。params に従って
+      - Sliced Wasserstein (または 1D legacy) で dist_img を作成
+      - メタデータ比率ベクトル作成 -> 標準化 -> weight 適用
+      - fusion_mode に従って distance fusion または kernel fusion を適用
+      - spectral clustering で最良 alpha/k を探索（silhouette で判定）
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if feature_extractor is None:
@@ -212,12 +226,12 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     model.to(device)
 
-    # extract all sample features
+    # extract all sample features (raw)
     feats_raw = []
     for cid in range(num_clients):
         feats_raw.append(extract_features(cid, model, device))
 
-    # distribution similarity
+    # distribution similarity (sliced)
     if use_distribution and params["wasserstein_mode"] == "sliced":
         dist_img, feats_list = compute_sliced_wasserstein_matrix(
             feats_raw,
@@ -229,11 +243,12 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
             params["n_jobs"],
             params["random_state"],
         )
+        # feats_list are PCA-space per-sample arrays; get per-client mean in PCA space
         feats_mean = np.vstack([f.mean(axis=0) for f in feats_list])
     else:
-        raise NotImplementedError
+        raise NotImplementedError("Only 'sliced' wasserstein_mode is implemented in this function.")
 
-    # metadata ratio
+    # metadata ratio (crop + disease)
     stats = []
     crops, dis = set(), set()
     for cid in range(num_clients):
@@ -271,68 +286,153 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     meta = np.vstack([get_vec(s) for s in stats])
 
+    # === standardize first (both views) ===
     meta = StandardScaler().fit_transform(meta)
     img  = StandardScaler().fit_transform(feats_mean)
 
+    # auto compute metadata weight (based on feature-space variances) and apply AFTER standardization
     img_var = np.mean(np.var(img, axis=0))
-    meta_var= np.mean(np.var(meta, axis=0))
-    w = params["metadata_weight"]
+    meta_var = np.mean(np.var(meta, axis=0))
+    w = params.get("metadata_weight", None)
     if w is None:
         w = np.sqrt((img_var + 1e-12) / (meta_var + 1e-12))
         w = float(np.clip(w, 1e-3, 1e3))
-    meta *= w
-    print(f"[Auto] metadata_weight={w:.4f}")
+    meta = meta * w
+    print(f"[Auto] metadata_weight = {w:.4f}")
 
-    # distance matrices normalized
+    # distance matrices normalized (zero-centered via StandardScaler above; now compute pairwise distances)
     eps = 1e-12
+    # dist_img is already computed in PCA space (Sliced WD) and has its own scale; normalize for fusion
     dist_img_n = dist_img / (np.std(dist_img) + eps)
     dist_meta  = pairwise_distances(meta, metric="euclidean")
     dist_meta_n = dist_meta / (np.std(dist_meta) + eps)
 
-    best_sil = -1
-    best = {}
+    best_sil = -np.inf
+    best = None
+    best_candidates_checked = 0
 
     max_allowed = params.get("max_cluster_size", None)
 
+    fusion_mode = params.get("fusion_mode", "distance")
+    print(f"[Info] fusion_mode = {fusion_mode}, alpha_grid = {params['alpha_grid']}")
+
+    # precompute per-view affinities if kernel fusion will be used
+    if fusion_mode == "kernel":
+        # Use Gaussian kernel with sigma chosen per-view (robust choice: median pairwise or std)
+        # Here we choose sigma = std(D) (after normalization -> typically 1.0), but keep flexibility
+        sigma_img = np.std(dist_img_n) if np.std(dist_img_n) > 1e-12 else 1.0
+        sigma_meta = np.std(dist_meta_n) if np.std(dist_meta_n) > 1e-12 else 1.0
+        A_img = np.exp(-(dist_img_n ** 2) / (2.0 * (sigma_img ** 2) + eps))
+        A_meta = np.exp(-(dist_meta_n ** 2) / (2.0 * (sigma_meta ** 2) + eps))
+        # ensure symmetry / numeric safety
+        A_img = (A_img + A_img.T) / 2.0
+        A_meta = (A_meta + A_meta.T) / 2.0
+    else:
+        A_img = A_meta = None
+
+    # grid search alpha & k
     for a in params["alpha_grid"]:
-        D = a * dist_img_n + (1-a) * dist_meta_n
-        sigma = np.std(D) or 1.0
-        A = np.exp(-(D**2)/(2*(sigma**2)+eps))
+        if fusion_mode == "distance":
+            D = a * dist_img_n + (1.0 - a) * dist_meta_n
+            # affinity for spectral: Gaussian RBF on D
+            sigma = np.std(D) if np.std(D) > 1e-12 else 1.0
+            A = np.exp(-(D ** 2) / (2.0 * (sigma ** 2) + eps))
+            A = (A + A.T) / 2.0
+        elif fusion_mode == "kernel":
+            A = a * A_img + (1.0 - a) * A_meta
+            A = (A + A.T) / 2.0
+            # derive a distance-like matrix for silhouette eval: use 1 - normalized affinity
+            D = 1.0 - (A - A.min()) / (A.max() - A.min() + eps)
+        else:
+            raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
 
         for k in params["k_range"]:
-            labels = SpectralClustering(
-                n_clusters=k, affinity="precomputed",
-                random_state=params["random_state"], n_init=10
-            ).fit_predict(A)
+            # spectral clustering on affinity matrix A
+            try:
+                sc = SpectralClustering(n_clusters=k, affinity="precomputed",
+                                        random_state=params["random_state"], n_init=10)
+                labels = sc.fit_predict(A)
+            except Exception as e:
+                print(f"[Warning] SpectralClustering failed for a={a}, k={k}: {e}")
+                continue
 
+            best_candidates_checked += 1
+
+            # silhouette using precomputed distances (D)
             try:
                 sil = silhouette_score(D, labels, metric="precomputed")
             except Exception:
-                sil = -1
+                sil = -1.0
 
-            # ===== クラスタ人数チェック =====
+            # cluster size constraint
             if max_allowed is not None:
                 _, counts = np.unique(labels, return_counts=True)
                 max_size = np.max(counts)
                 if max_size > max_allowed:
-                    # どデカいクラスタは門前払い
+                    # skip overly-large-cluster solutions
+                    # (but keep searching; if everything skipped later, we'll fall back)
                     continue
 
             if sil > best_sil:
                 best_sil = sil
-                best = {"alpha": a, "k": k, "labels": labels.copy()}
-                print(f"[BestUpdate] α={a}, k={k}, sil={sil:.4f}")
+                best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
+                print(f"[BestUpdate] fusion={fusion_mode} α={a}, k={k}, sil={sil:.4f}")
 
-    print(f"[RESULT] alpha={best['alpha']}, k={best['k']}, silhouette={best_sil:.4f}")
+    if best is None:
+        # nothing passed the max_allowed filter (or spectral failed). Fallback:
+        print("[Warning] No valid clustering found under current constraints (max_cluster_size?). Falling back to unconstrained best by silhouette.")
+        # try again without max_allowed
+        best_sil = -np.inf
+        for a in params["alpha_grid"]:
+            if fusion_mode == "distance":
+                D = a * dist_img_n + (1.0 - a) * dist_meta_n
+                sigma = np.std(D) if np.std(D) > 1e-12 else 1.0
+                A = np.exp(-(D ** 2) / (2.0 * (sigma ** 2) + eps))
+                A = (A + A.T) / 2.0
+            else:
+                A = a * A_img + (1.0 - a) * A_meta
+                A = (A + A.T) / 2.0
+                D = 1.0 - (A - A.min()) / (A.max() - A.min() + eps)
 
+            for k in params["k_range"]:
+                try:
+                    sc = SpectralClustering(n_clusters=k, affinity="precomputed",
+                                            random_state=params["random_state"], n_init=10)
+                    labels = sc.fit_predict(A)
+                except Exception:
+                    continue
+                try:
+                    sil = silhouette_score(D, labels, metric="precomputed")
+                except Exception:
+                    sil = -1.0
+                if sil > best_sil:
+                    best_sil = sil
+                    best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
+        if best is None:
+            raise RuntimeError("Clustering failed completely (SpectralClustering couldn't run).")
+
+    print(f"[RESULT] fusion={fusion_mode} alpha={best['alpha']}, k={best['k']}, silhouette={best['sil']:.4f}")
+
+    # optional: visualize using MDS on D (distance-like)
     if params["use_mds_for_visual"]:
-        D = best["alpha"] * dist_img_n + (1-best["alpha"])*dist_meta_n
-        X = MDS(n_components=2, dissimilarity="precomputed").fit_transform(D)
-        plt.figure(figsize=(8,6))
-        for cl in np.unique(best["labels"]):
-            idx = best["labels"] == cl
-            plt.scatter(X[idx,0], X[idx,1], label=f"Cluster{cl}", alpha=0.7)
-        plt.legend()
-        plt.savefig("FusionCluster_MDS.png", dpi=300)
+        try:
+            D_vis = None
+            if params["fusion_mode"] == "distance":
+                D_vis = best["alpha"] * dist_img_n + (1 - best["alpha"]) * dist_meta_n
+            else:
+                # for kernel, turn affinity into distance proxy
+                A_best = best["alpha"] * A_img + (1 - best["alpha"]) * A_meta
+                D_vis = 1.0 - (A_best - A_best.min()) / (A_best.max() - A_best.min() + eps)
+            X = MDS(n_components=2, dissimilarity="precomputed", random_state=params["random_state"]).fit_transform(D_vis)
+            plt.figure(figsize=(8, 6))
+            for cl in np.unique(best["labels"]):
+                idx = best["labels"] == cl
+                plt.scatter(X[idx, 0], X[idx, 1], label=f"Cluster{cl}", alpha=0.7)
+            plt.legend()
+            plt.title(f"Fusion {params['fusion_mode']} alpha={best['alpha']}, k={best['k']}")
+            plt.savefig("FusionCluster_MDS.png", dpi=300)
+            plt.close()
+        except Exception as e:
+            print("[Warning] MDS visualization failed:", e)
 
-    return {cid:int(best["labels"][cid]) for cid in range(num_clients)}
+    return {cid: int(best["labels"][cid]) for cid in range(num_clients)}
