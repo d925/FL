@@ -35,7 +35,7 @@ params = {
     "random_state": 0,
 
     # fusion selection: "distance" or "kernel"
-    "fusion_mode": "distance",
+    "fusion_mode": "kernel",
 
     # distribution similarity (Sliced WD)
     "wasserstein_mode": "sliced",
