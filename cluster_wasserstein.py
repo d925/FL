@@ -47,7 +47,7 @@ params = {
     "n_jobs": 8,
 
     # metadata scaling
-    "metadata_weight": 3.0,
+    "metadata_weight": 100.0,
     "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
 }
 
