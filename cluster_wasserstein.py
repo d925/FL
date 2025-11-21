@@ -284,134 +284,93 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
             np.array([dd[d] / tot for d in dis]),
         ])
 
+# === Step 1: Get features ===
     meta = np.vstack([get_vec(s) for s in stats])
 
-    # === standardize first (both views) ===
-    meta = StandardScaler().fit_transform(meta)
-    img  = StandardScaler().fit_transform(feats_mean)
+    # === Step 2: Standardize both feature views ===
+    scaler_meta = StandardScaler()
+    scaler_img  = StandardScaler()
+    meta = scaler_meta.fit_transform(meta)
+    img  = scaler_img.fit_transform(feats_mean)
 
-    # auto compute metadata weight (based on feature-space variances) and apply AFTER standardization
-    img_var = np.mean(np.var(img, axis=0))
+    # === Step 3: Decide metadata weight only for distance fusion ===
+    img_var  = np.mean(np.var(img, axis=0))
     meta_var = np.mean(np.var(meta, axis=0))
-    w = params.get("metadata_weight", None)
-    if w is None:
-        w = np.sqrt((img_var + 1e-12) / (meta_var + 1e-12))
-        w = float(np.clip(w, 1e-3, 1e3))
-    meta = meta * w
-    print(f"[Auto] metadata_weight = {w:.4f}")
 
-    # distance matrices normalized (zero-centered via StandardScaler above; now compute pairwise distances)
+    if params.get("fusion_mode", "distance") == "distance":
+        w = params.get("metadata_weight", None)
+        if w is None:
+            w = np.sqrt((img_var + 1e-12) / (meta_var + 1e-12))
+            w = float(np.clip(w, 1e-3, 1e3))
+        meta_scaled = meta * w
+        print(f"[Auto] metadata_weight (distance fusion) = {w:.4f}")
+    else:
+        # kernel fusionでは特徴量の重みは距離レベルでなくkernelに含まれるので w適用しない
+        meta_scaled = meta
+        print("[Info] metadata weight disabled for kernel fusion")
+
+    # === Step 4: Distance computation ===
     eps = 1e-12
-    # dist_img is already computed in PCA space (Sliced WD) and has its own scale; normalize for fusion
-    dist_img_n = dist_img / (np.std(dist_img) + eps)
-    dist_meta  = pairwise_distances(meta, metric="euclidean")
-    dist_meta_n = dist_meta / (np.std(dist_meta) + eps)
-
-    best_sil = -np.inf
-    best = None
-    best_candidates_checked = 0
-
-    max_allowed = params.get("max_cluster_size", None)
+    dist_img  = dist_img / (np.std(dist_img) + eps)
+    dist_meta = pairwise_distances(meta_scaled, metric="euclidean")
+    dist_meta = dist_meta / (np.std(dist_meta) + eps)
 
     fusion_mode = params.get("fusion_mode", "distance")
     print(f"[Info] fusion_mode = {fusion_mode}, alpha_grid = {params['alpha_grid']}")
 
-    # precompute per-view affinities if kernel fusion will be used
+    # === Step 5: Kernel precompute (only if needed) ===
     if fusion_mode == "kernel":
-        # Use Gaussian kernel with sigma chosen per-view (robust choice: median pairwise or std)
-        # Here we choose sigma = std(D) (after normalization -> typically 1.0), but keep flexibility
-        sigma_img = np.std(dist_img_n) if np.std(dist_img_n) > 1e-12 else 1.0
-        sigma_meta = np.std(dist_meta_n) if np.std(dist_meta_n) > 1e-12 else 1.0
-        A_img = np.exp(-(dist_img_n ** 2) / (2.0 * (sigma_img ** 2) + eps))
-        A_meta = np.exp(-(dist_meta_n ** 2) / (2.0 * (sigma_meta ** 2) + eps))
-        # ensure symmetry / numeric safety
-        A_img = (A_img + A_img.T) / 2.0
-        A_meta = (A_meta + A_meta.T) / 2.0
-    else:
-        A_img = A_meta = None
+        sigma_img  = np.std(dist_img) if np.std(dist_img) > 1e-12 else 1.0
+        sigma_meta = np.std(dist_meta) if np.std(dist_meta) > 1e-12 else 1.0
 
-    # grid search alpha & k
+        A_img  = np.exp(-(dist_img**2)  / (2 * sigma_img**2  + eps))
+        A_meta = np.exp(-(dist_meta**2) / (2 * sigma_meta**2 + eps))
+
+        A_img  = (A_img  + A_img.T ) / 2
+        A_meta = (A_meta + A_meta.T) / 2
+
+    best_sil = -np.inf
+    best = None
+
+    # === Step 6: Grid search over α and cluster count ===
     for a in params["alpha_grid"]:
+
         if fusion_mode == "distance":
-            D = a * dist_img_n + (1.0 - a) * dist_meta_n
-            # affinity for spectral: Gaussian RBF on D
+            D = a * dist_img + (1 - a) * dist_meta
             sigma = np.std(D) if np.std(D) > 1e-12 else 1.0
-            A = np.exp(-(D ** 2) / (2.0 * (sigma ** 2) + eps))
-            A = (A + A.T) / 2.0
+            A = np.exp(-(D**2) / (2 * sigma**2 + eps))
+            A = (A + A.T) / 2
+
         elif fusion_mode == "kernel":
-            A = a * A_img + (1.0 - a) * A_meta
-            A = (A + A.T) / 2.0
-            # derive a distance-like matrix for silhouette eval: use 1 - normalized affinity
-            D = 1.0 - (A - A.min()) / (A.max() - A.min() + eps)
+            A = a * A_img + (1 - a) * A_meta
+            A = (A + A.T) / 2
+            D = 1 - (A - A.min()) / (A.max() - A.min() + eps)
+
         else:
             raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
 
+        # === Step 7: Search cluster numbers ===
         for k in params["k_range"]:
-            # spectral clustering on affinity matrix A
             try:
-                sc = SpectralClustering(n_clusters=k, affinity="precomputed",
-                                        random_state=params["random_state"], n_init=10)
+                sc = SpectralClustering(
+                    n_clusters=k, affinity="precomputed", 
+                    random_state=params["random_state"], n_init=10
+                )
                 labels = sc.fit_predict(A)
-            except Exception as e:
-                print(f"[Warning] SpectralClustering failed for a={a}, k={k}: {e}")
+            except Exception:
                 continue
 
-            best_candidates_checked += 1
-
-            # silhouette using precomputed distances (D)
             try:
                 sil = silhouette_score(D, labels, metric="precomputed")
             except Exception:
                 sil = -1.0
 
-            # cluster size constraint
-            if max_allowed is not None:
-                _, counts = np.unique(labels, return_counts=True)
-                max_size = np.max(counts)
-                if max_size > max_allowed:
-                    # skip overly-large-cluster solutions
-                    # (but keep searching; if everything skipped later, we'll fall back)
-                    continue
-
             if sil > best_sil:
                 best_sil = sil
                 best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
-                print(f"[BestUpdate] fusion={fusion_mode} α={a}, k={k}, sil={sil:.4f}")
+                print(f"[BestUpdate] α={a}, k={k}, sil={sil:.4f}")
 
-    if best is None:
-        # nothing passed the max_allowed filter (or spectral failed). Fallback:
-        print("[Warning] No valid clustering found under current constraints (max_cluster_size?). Falling back to unconstrained best by silhouette.")
-        # try again without max_allowed
-        best_sil = -np.inf
-        for a in params["alpha_grid"]:
-            if fusion_mode == "distance":
-                D = a * dist_img_n + (1.0 - a) * dist_meta_n
-                sigma = np.std(D) if np.std(D) > 1e-12 else 1.0
-                A = np.exp(-(D ** 2) / (2.0 * (sigma ** 2) + eps))
-                A = (A + A.T) / 2.0
-            else:
-                A = a * A_img + (1.0 - a) * A_meta
-                A = (A + A.T) / 2.0
-                D = 1.0 - (A - A.min()) / (A.max() - A.min() + eps)
-
-            for k in params["k_range"]:
-                try:
-                    sc = SpectralClustering(n_clusters=k, affinity="precomputed",
-                                            random_state=params["random_state"], n_init=10)
-                    labels = sc.fit_predict(A)
-                except Exception:
-                    continue
-                try:
-                    sil = silhouette_score(D, labels, metric="precomputed")
-                except Exception:
-                    sil = -1.0
-                if sil > best_sil:
-                    best_sil = sil
-                    best = {"alpha": a, "k": k, "labels": labels.copy(), "sil": sil}
-        if best is None:
-            raise RuntimeError("Clustering failed completely (SpectralClustering couldn't run).")
-
-    print(f"[RESULT] fusion={fusion_mode} alpha={best['alpha']}, k={best['k']}, silhouette={best['sil']:.4f}")
+    print(f"[RESULT] fusion={fusion_mode}, alpha={best['alpha']}, k={best['k']}, silhouette={best['sil']:.4f}")
 
     # optional: visualize using MDS on D (distance-like)
     if params["use_mds_for_visual"]:
