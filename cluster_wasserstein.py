@@ -35,7 +35,7 @@ params = {
     "random_state": 0,
 
     # fusion selection: "distance" or "kernel"
-    "fusion_mode": "kernel",
+    "fusion_mode": "distance",
 
     # distribution similarity (Sliced WD)
     "wasserstein_mode": "sliced",
@@ -320,8 +320,9 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     # === Step 5: Kernel precompute (only if needed) ===
     if fusion_mode == "kernel":
-        sigma_img  = np.std(dist_img) if np.std(dist_img) > 1e-12 else 1.0
-        sigma_meta = np.std(dist_meta) if np.std(dist_meta) > 1e-12 else 1.0
+        sigma_img = np.median(dist_img)
+        sigma_meta = np.median(dist_meta)
+
 
         A_img  = np.exp(-(dist_img**2)  / (2 * sigma_img**2  + eps))
         A_meta = np.exp(-(dist_meta**2) / (2 * sigma_meta**2 + eps))
