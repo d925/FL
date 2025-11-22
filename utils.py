@@ -31,7 +31,7 @@ def generate_and_save_dirichlet_partitioned_data(
     # =========================================================
     # 乱数シード固定
     # =========================================================
-    SEED = 44
+    SEED = 6
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
