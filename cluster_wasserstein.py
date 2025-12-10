@@ -29,10 +29,10 @@ params = {
     "method": "distance",
     "cluster_method": "spectral",
     "k_range": list(range(3, 10)),
-    "alpha_grid": [0.3, 0.4, 0.5, 0.6, 0.7],  # include endpoints
+    "alpha_grid": [1.0],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 9,
+    "random_state": 0,
 
     # fusion selection: "distance" or "kernel"
     "fusion_mode": "distance",
