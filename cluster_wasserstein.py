@@ -48,7 +48,7 @@ params = {
 
     # metadata scaling
     "metadata_weight": None,
-    "max_cluster_size": 20,  # None: no restriction, or int to limit largest cluster
+    "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
 }
 
 # fix seeds
