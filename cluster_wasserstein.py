@@ -28,11 +28,11 @@ params = {
     # clustering
     "method": "distance",
     "cluster_method": "spectral",
-    "k_range": list(range(3, 10)),
-    "alpha_grid": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],  # include endpoints
+    "k_range": list(range(5, 10)),
+    "alpha_grid": [1.0],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 3,
+    "random_state": 4,
 
     # fusion selection: "distance" or "kernel"
     "fusion_mode": "distance",
