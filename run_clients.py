@@ -25,7 +25,7 @@ FEDPROX_MU = 0.1
 # -------------------
 
 # 乱数シード完全固定
-SEED = 5
+SEED = 6
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)

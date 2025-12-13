@@ -32,7 +32,7 @@ params = {
     "alpha_grid": [1.0],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 5,
+    "random_state": 6,
 
     # fusion selection: "distance" or "kernel"
     "fusion_mode": "distance",
