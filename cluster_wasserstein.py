@@ -28,11 +28,11 @@ params = {
     # clustering
     "method": "distance",
     "cluster_method": "spectral",
-    "k_range": list(range(3, 10)),
-    "alpha_grid": [0.3, 0.4, 0.5, 0.6, 0.7],  # include endpoints
+    "k_range": list(range(5, 10)),
+    "alpha_grid": [1.0],  # include endpoints
     "use_mds_for_visual": True,
     "mds_dim": 2,
-    "random_state": 0,
+    "random_state": 7,
 
     # fusion selection: "distance" or "kernel"
     "fusion_mode": "distance",
@@ -48,7 +48,7 @@ params = {
 
     # metadata scaling
     "metadata_weight": None,
-    "max_cluster_size": 20,  # None: no restriction, or int to limit largest cluster
+    "max_cluster_size": None,  # None: no restriction, or int to limit largest cluster
 }
 
 # fix seeds
@@ -193,9 +193,6 @@ def compute_sliced_wasserstein_matrix(
 # feature extraction
 # ============================================================
 def extract_features(client_id, model, device):
-    """
-    クライアントのデータからResNet-18の最終全結合層直前の特徴量（512次元）を抽出
-    """
     dataset, _ = get_partitioned_data(client_id, num_clients)
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
     feats = []
@@ -203,8 +200,7 @@ def extract_features(client_id, model, device):
     with torch.no_grad():
         for x, _ in loader:
             x = x.to(device)
-            # モデルのextract_featuresメソッドを使用（512次元）
-            feats.append(model.extract_features(x).cpu().numpy())
+            feats.append(model(x).cpu().numpy())
     return np.concatenate(feats, axis=0)
 
 
@@ -223,8 +219,8 @@ def cluster_clients_with_metadata_ratio(num_clients, feature_extractor=None, use
 
     if feature_extractor is None:
         from model import CNN
-        # ImageNet事前学習済みResNet-18を使用
-        model = CNN(num_classes=38, pretrained=True)
+        model = CNN(num_classes=38)
+        model.fc2 = nn.Identity()
     else:
         model = feature_extractor
 

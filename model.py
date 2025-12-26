@@ -1,43 +1,37 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as models
 from config import num_labels
 
 class CNN(nn.Module):
-    """
-    ResNet-18ベースの分類モデル（ImageNet事前学習済み）
-    特徴抽出時は最終全結合層直前の512次元を使用
-    """
-    def __init__(self, num_classes: int = num_labels, pretrained: bool = True):
+    def __init__(self, num_classes: int = num_labels):
         super(CNN, self).__init__()
-        
-        # ImageNet事前学習済みResNet-18をロード
-        self.backbone = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None)
-        
-        # 最終全結合層を置き換え（38クラス分類用）
-        in_features = self.backbone.fc.in_features  # 512
-        self.backbone.fc = nn.Linear(in_features, num_classes)
-    
-    def forward(self, x):
-        return self.backbone(x)
-    
-    def extract_features(self, x):
-        """
-        最終全結合層直前の特徴量（512次元）を抽出
-        """
-        # ResNet-18の構造に従って特徴抽出
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
-        
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-        x = self.backbone.layer3(x)
-        x = self.backbone.layer4(x)
-        
-        x = self.backbone.avgpool(x)
-        x = torch.flatten(x, 1)  # (batch, 512)
+
+        # Convolution + GroupNorm
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.gn1   = nn.GroupNorm(4, 32)   # 32ch → 4グループ推奨
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.gn2   = nn.GroupNorm(4, 64)
+
+        self.pool = nn.MaxPool2d(2, 2)
+
+        # Dropout弱め
+        self.dropout = nn.Dropout(0.1)
+
+        # FCを縮小（安定性向上）
+        self.fc1 = nn.Linear(64 * 32 * 32, 256)
+        self.fc2 = nn.Linear(256, num_classes)
+
+    def _forward_conv(self, x):
+        x = self.pool(F.relu(self.gn1(self.conv1(x))))  # (B, 32, 64, 64)
+        x = self.pool(F.relu(self.gn2(self.conv2(x))))  # (B, 64, 32, 32)
         return x
 
+    def forward(self, x):
+        x = self._forward_conv(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
