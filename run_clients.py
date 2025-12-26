@@ -25,7 +25,7 @@ FEDPROX_MU = 0.1
 # -------------------
 
 # 乱数シード完全固定
-SEED = 7
+SEED = 0
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -69,7 +69,8 @@ class FLClient(NumPyClient):
     def __init__(self, cid, active_cids, mu=FEDPROX_MU):
         self.cid = int(cid)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = CNN(num_classes=num_labels).to(self.device)
+        # ImageNet事前学習済みResNet-18を使用
+        self.model = CNN(num_classes=num_labels, pretrained=True).to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
         self.mu = float(mu)
